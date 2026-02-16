@@ -11383,8 +11383,8 @@ BR advised that TC is continuing to use Classroom Cloud and whilst it can be ove
 GDPR
 The Federation has now moved to HfL to provide a GDPR and DPO service. This provides a more cost-effective provision and additional guidance, in addition BR is currently working with various departments within HfL and therefore bringing it under the same supplier will provide a more effective system. The new DPO is Sharon Lindars.
 
-8 | Staffing review from Part 2 minutes 12/02/2025
-The budget does not include any reduction in staffing levels and therefore as part of the budget approval there was no further discussion required in relation to the previous part 2 minutes.
+8 | Staffing review
+No staffing level changes included in the budget.
 
 9 | Policies/Guidance for review (on Governor Hub):
 
@@ -11652,7 +11652,7 @@ LH advised that she has reviewed the trigger words in the reports and has found 
 8 | Staffing updates
 BR advised there are 2 maternity leave covers in place and 2 resignations (one at each school). Absence remains the biggest concern for both schools.
 
-Governors discussed staffing plans for September, which are included in Part 2 Minutes.
+Governors discussed staffing plans for September.
 
 Update on the Performance Management interim reviews
 BR advised all review meetings will be conducted by Easter and all staff were asked to complete a RAG rating on their progress and annotate their review documents accordingly. 
@@ -12327,7 +12327,6 @@ Review of actions from 27th November 2024
 12) Governors to review sustainability support from AB during the summer term – reviewed possibility of installing solar panels, following research by AB and TT. Agreement at Resources to continue the research - Ongoing
 13) Governors that have received complaints training to inform EB of their availability for the week beginning 16th December, by 5th December, if a panel is required – Completed
 
-Part 2 minutes from 27th November 2024 were approved by governors.
 
 Review of outstanding strategy day actions
 • EB, alongside SH and VH to schedule training for TB on Pupil Discipline, Staff Discipline Grievance and Appeals to support new governor link role, handing over from VH, by the end of the academic year – ongoing, awaiting courses. TB has conducted some courses and regularly reviews available training and shares these with governors

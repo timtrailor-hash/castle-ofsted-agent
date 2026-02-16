@@ -160,6 +160,7 @@ IMPORTANT:
 - ALWAYS respond in the ANSWER/EVIDENCE/SOURCE format above, even if the input is unclear
 - Keep it SHORT — the governor needs to glance and speak, not read an essay
 - SOURCE filenames must be EXACT copies from the [SOURCE: ...] tags — never abbreviate
+- NEVER reference, quote, or discuss Part 2 minutes — these are highly confidential and not available
 
 --- SCHOOL DOCUMENTS ---
 
@@ -356,19 +357,88 @@ def clear_audio_questions():
 st.set_page_config(page_title="Ofsted Agent — Castle CE Federation", page_icon="🏫", layout="wide")
 
 
-# ── Authentication ───────────────────────────────────────────────────────────
+# ── Authentication — email magic code for @castlefederation.org ──────────────
 
-def check_password():
-    """Password gate for shared governor access. Skipped if no password configured."""
+import hmac
+import hashlib
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+
+def generate_code(email, secret, window_minutes=10):
+    """Generate a time-based 6-digit code. Valid for window_minutes."""
+    time_window = int(time.time()) // (window_minutes * 60)
+    msg = f"{email.lower().strip()}:{time_window}".encode()
+    h = hmac.new(secret.encode(), msg, hashlib.sha256).hexdigest()
+    return str(int(h[:8], 16) % 1000000).zfill(6)
+
+
+def verify_code(email, code, secret, window_minutes=10):
+    """Verify code — check current and previous time window for grace period."""
+    current = generate_code(email, secret, window_minutes)
+    time_window_prev = int(time.time()) // (window_minutes * 60) - 1
+    msg_prev = f"{email.lower().strip()}:{time_window_prev}".encode()
+    h_prev = hmac.new(secret.encode(), msg_prev, hashlib.sha256).hexdigest()
+    previous = str(int(h_prev[:8], 16) % 1000000).zfill(6)
+    return code == current or code == previous
+
+
+def send_code_email(email, code):
+    """Send the sign-in code via SMTP."""
     try:
-        password = st.secrets["password"]
+        smtp_host = st.secrets.get("SMTP_HOST", "smtp.gmail.com")
+        smtp_port = int(st.secrets.get("SMTP_PORT", 587))
+        smtp_user = st.secrets["SMTP_USER"]
+        smtp_pass = st.secrets["SMTP_PASS"]
     except Exception:
-        return True  # No password configured = local dev, no auth needed
+        return False, "Email not configured. Contact the Chair of Governors."
+
+    msg = MIMEMultipart()
+    msg["From"] = f"Castle CE Federation <{smtp_user}>"
+    msg["To"] = email
+    msg["Subject"] = "Your Ofsted Agent sign-in code"
+    body = f"""Hello,
+
+Your sign-in code for the Castle CE Federation Ofsted Agent is:
+
+    {code}
+
+This code is valid for 10 minutes.
+
+If you did not request this, please ignore this email.
+
+Castle CE Federation
+"Do everything in love" — 1 Corinthians 16:14
+"""
+    msg.attach(MIMEText(body, "plain"))
+    try:
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
+        return True, "Code sent"
+    except Exception as e:
+        return False, f"Failed to send email: {e}"
+
+
+def check_auth():
+    """Email-based auth for @castlefederation.org. Skipped locally if no secrets."""
+    # Skip auth entirely if no secrets configured (local dev)
+    try:
+        _ = st.secrets["SMTP_USER"]
+    except Exception:
+        return True
 
     if st.session_state.get("authenticated"):
         return True
 
-    # Login screen
+    # Initialize auth state
+    if "auth_step" not in st.session_state:
+        st.session_state.auth_step = "email"  # "email" or "code"
+    if "auth_email" not in st.session_state:
+        st.session_state.auth_email = ""
+
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         if LOGO_FILE.exists():
@@ -377,18 +447,47 @@ def check_password():
         st.markdown(f'<h2 style="text-align:center;color:{NAVY}">Ofsted Inspection Agent</h2>', unsafe_allow_html=True)
         st.markdown(f'<p style="text-align:center;color:{GOLD};font-style:italic">"Do everything in love" — 1 Corinthians 16:14</p>', unsafe_allow_html=True)
         st.markdown("---")
-        pwd = st.text_input("Governor password", type="password", placeholder="Enter shared password")
-        if st.button("Sign in", use_container_width=True, type="primary"):
-            if pwd == password:
-                st.session_state.authenticated = True
-                st.rerun()
-            else:
-                st.error("Incorrect password. Please try again.")
+
+        if st.session_state.auth_step == "email":
+            email = st.text_input("Governor email address", placeholder="name@castlefederation.org")
+            if st.button("Send sign-in code", use_container_width=True, type="primary"):
+                email = email.strip().lower()
+                if not email.endswith("@castlefederation.org"):
+                    st.error("Please use your @castlefederation.org email address.")
+                else:
+                    secret = st.secrets.get("AUTH_SECRET", "castle-fed-2026")
+                    code = generate_code(email, secret)
+                    ok, msg = send_code_email(email, code)
+                    if ok:
+                        st.session_state.auth_email = email
+                        st.session_state.auth_step = "code"
+                        st.rerun()
+                    else:
+                        st.error(msg)
+
+        elif st.session_state.auth_step == "code":
+            st.success(f"Code sent to **{st.session_state.auth_email}**")
+            st.caption("Check your inbox (and spam folder). The code is valid for 10 minutes.")
+            code = st.text_input("Enter 6-digit code", max_chars=6, placeholder="000000")
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("Verify", use_container_width=True, type="primary"):
+                    secret = st.secrets.get("AUTH_SECRET", "castle-fed-2026")
+                    if verify_code(st.session_state.auth_email, code.strip(), secret):
+                        st.session_state.authenticated = True
+                        st.rerun()
+                    else:
+                        st.error("Invalid or expired code. Please try again.")
+            with c2:
+                if st.button("Back", use_container_width=True):
+                    st.session_state.auth_step = "email"
+                    st.rerun()
+
         st.markdown(f'<p style="text-align:center;color:#999;font-size:0.8em;margin-top:2em">Castle CE Federation — Governor Access Only</p>', unsafe_allow_html=True)
     return False
 
 
-if not check_password():
+if not check_auth():
     st.stop()
 
 # ── CSS — complete redesign ──────────────────────────────────────────────────
