@@ -423,11 +423,13 @@ Castle CE Federation
 
 
 def check_auth():
-    """Email-based auth for @castlefederation.org. Only active when AUTH_ENABLED = true in secrets."""
-    # Skip auth unless explicitly enabled in secrets
+    """Email-based auth for @castlefederation.org. Active in cloud, skipped locally."""
+    # Skip auth locally (not cloud)
+    if not IS_CLOUD:
+        return True
+    # Skip if SMTP not configured yet
     try:
-        if not st.secrets.get("AUTH_ENABLED", False):
-            return True
+        _ = st.secrets["SMTP_USER"]
     except Exception:
         return True
 
