@@ -1,0 +1,19 @@
+# Secrets — never commit
+.env
+.streamlit/secrets.toml
+
+# Local-only files
+audio_worker.py
+audio_worker.log
+audio_state.json
+audio_worker.pid
+crawl_and_prepare.py
+ofsted_agent.py
+OfstedAgent.icns
+mlx_models/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
