@@ -423,10 +423,11 @@ Castle CE Federation
 
 
 def check_auth():
-    """Email-based auth for @castlefederation.org. Skipped locally if no secrets."""
-    # Skip auth entirely if no secrets configured (local dev)
+    """Email-based auth for @castlefederation.org. Only active when AUTH_ENABLED = true in secrets."""
+    # Skip auth unless explicitly enabled in secrets
     try:
-        _ = st.secrets["SMTP_USER"]
+        if not st.secrets.get("AUTH_ENABLED", False):
+            return True
     except Exception:
         return True
 
@@ -447,6 +448,8 @@ def check_auth():
         st.markdown(f'<h2 style="text-align:center;color:{NAVY}">Ofsted Inspection Agent</h2>', unsafe_allow_html=True)
         st.markdown(f'<p style="text-align:center;color:{GOLD};font-style:italic">"Do everything in love" — 1 Corinthians 16:14</p>', unsafe_allow_html=True)
         st.markdown("---")
+        # Fix input visibility against dark theme
+        st.markdown('<style>input[type="text"], input[type="password"] { color: #1a1a2e !important; background: #ffffff !important; -webkit-text-fill-color: #1a1a2e !important; }</style>', unsafe_allow_html=True)
 
         if st.session_state.auth_step == "email":
             email = st.text_input("Governor email address", placeholder="name@castlefederation.org")
