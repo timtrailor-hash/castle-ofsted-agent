@@ -14,6 +14,7 @@ from pathlib import Path
 
 import requests
 import streamlit as st
+from datetime import datetime as _dt
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 
@@ -53,6 +54,97 @@ def load_env():
                 os.environ[key.strip()] = val.strip().strip('"').strip("'")
 
 load_env()
+
+# ── Google Sheets logging ────────────────────────────────────────────────────
+
+_LOG_HEADERS = [
+    "Timestamp", "Event", "Email", "School Focus", "Model",
+    "Input Mode", "Question", "Answer", "Sources",
+    "Tokens In", "Tokens Out", "Cache Hit",
+]
+
+
+def _get_gspread_client():
+    """Return a cached gspread client, or None if unavailable."""
+    if "gs_client" in st.session_state:
+        return st.session_state.gs_client
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        # Cloud: credentials in Streamlit secrets
+        try:
+            info = dict(st.secrets["gcp_service_account"])
+            creds = Credentials.from_service_account_info(info, scopes=scopes)
+        except Exception:
+            # Local: JSON file
+            sa_path = APP_DIR.parent / "Downloads" / "castle-ofsted-agent-e9a07e17085b.json"
+            if not sa_path.exists():
+                sa_path = Path.home() / "Downloads" / "castle-ofsted-agent-e9a07e17085b.json"
+            if not sa_path.exists():
+                st.session_state.gs_client = None
+                return None
+            creds = Credentials.from_service_account_file(str(sa_path), scopes=scopes)
+
+        client = gspread.authorize(creds)
+        st.session_state.gs_client = client
+        return client
+    except Exception:
+        st.session_state.gs_client = None
+        return None
+
+
+def _get_sheet_id():
+    """Return the Google Sheet ID from secrets or .env."""
+    try:
+        return st.secrets["GOOGLE_SHEETS_ID"]
+    except Exception:
+        return os.environ.get("GOOGLE_SHEETS_ID", "")
+
+
+def log_event(event, email="", school="", model="", input_mode="",
+              question="", answer="", sources="",
+              tokens_in=0, tokens_out=0, cache_hit=False):
+    """Append one row to the Activity Log sheet. Never raises."""
+    try:
+        client = _get_gspread_client()
+        sheet_id = _get_sheet_id()
+        if not client or not sheet_id:
+            return
+
+        spreadsheet = client.open_by_key(sheet_id)
+        try:
+            worksheet = spreadsheet.worksheet("Activity Log")
+        except Exception:
+            worksheet = spreadsheet.sheet1
+            worksheet.update_title("Activity Log")
+
+        # Auto-create headers if sheet is empty
+        if not worksheet.row_values(1):
+            worksheet.append_row(_LOG_HEADERS, value_input_option="RAW")
+
+        row = [
+            _dt.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
+            event,
+            email,
+            school,
+            model,
+            input_mode,
+            question[:1000] if question else "",
+            answer[:2000] if answer else "",
+            sources[:500] if sources else "",
+            tokens_in,
+            tokens_out,
+            "Yes" if cache_hit else "No",
+        ]
+        worksheet.append_row(row, value_input_option="RAW")
+    except Exception:
+        pass  # Silent failure — logging must never break the app
+
 
 # ── Models ───────────────────────────────────────────────────────────────────
 
@@ -659,6 +751,7 @@ def check_auth():
         if email:
             st.session_state.authenticated = True
             st.session_state.auth_email = email
+            log_event("cookie_login", email=email)
             return True
 
     # Initialize auth state
@@ -704,6 +797,7 @@ def check_auth():
                     secret = st.secrets.get("AUTH_SECRET", "castle-fed-2026")
                     if verify_code(st.session_state.auth_email, code.strip(), secret):
                         st.session_state.authenticated = True
+                        log_event("login", email=st.session_state.auth_email)
                         # Set 7-day remember-me cookie
                         token = create_auth_token(st.session_state.auth_email, secret, days=7)
                         cookie_manager = CookieManager(key="auth_cookies_set")
@@ -1147,6 +1241,16 @@ with st.container():
                 "role": "assistant", "content": full_text,
                 "parsed": parsed, "evidence_idx": ev_idx,
             })
+            log_event("answer",
+                      email=st.session_state.get("auth_email", "local"),
+                      school=school_focus, model=model_choice,
+                      input_mode=input_mode.lower(),
+                      question=question,
+                      answer=parsed.get("answer", ""),
+                      sources=parsed.get("source", ""),
+                      tokens_in=usage.get("input", 0),
+                      tokens_out=usage.get("output", 0),
+                      cache_hit=usage.get("cache_read", 0) > 0)
             placeholder.empty()
             st.rerun()
         except Exception as e:
@@ -1211,12 +1315,18 @@ with st.container():
                 st.session_state.processed_questions.add(q)
                 clear_audio_questions()
                 st.session_state.messages.append({"role": "user", "content": q})
+                log_event("question", email=st.session_state.get("auth_email", "local"),
+                          school=school_focus, model=model_choice,
+                          input_mode="audio", question=q)
                 st.rerun()
 
     # ── Chat input (always at bottom) ──
     question = st.chat_input("Ask an Ofsted inspection question...")
     if question:
         st.session_state.messages.append({"role": "user", "content": question})
+        log_event("question", email=st.session_state.get("auth_email", "local"),
+                  school=school_focus, model=model_choice,
+                  input_mode="text", question=question)
         st.rerun()
 
 
