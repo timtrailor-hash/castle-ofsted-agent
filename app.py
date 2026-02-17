@@ -874,8 +874,11 @@ with st.container():
             st.session_state.warming_up = False
 
     elif st.session_state.cache_warmed and not st.session_state.messages:
-        n_files = len(st.session_state.get("file_index", {}))
-        st.markdown(f'<div class="ready-banner">✅ Ready — documents cached, {n_files:,} files indexed. Ask a question below.</div>', unsafe_allow_html=True)
+        if IS_CLOUD:
+            st.markdown('<div class="ready-banner">✅ Ready — documents cached. Ask a question below.</div>', unsafe_allow_html=True)
+        else:
+            n_files = len(st.session_state.get("file_index", {}))
+            st.markdown(f'<div class="ready-banner">✅ Ready — documents cached, {n_files:,} files indexed. Ask a question below.</div>', unsafe_allow_html=True)
 
     # ── Chat history ──
     for i, msg in enumerate(st.session_state.messages):
