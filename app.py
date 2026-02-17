@@ -66,6 +66,10 @@ NAVY = "#2a2e45"
 GOLD = "#C1A559"
 LIGHT_BG = "#f7f7f7"
 
+# Token budget: Claude's 200K context limit minus headroom for system prompt,
+# tool definitions, messages, and tokenizer differences (tiktoken undercounts vs Claude)
+MAX_CONTEXT_TOKENS = 150_000
+
 # ── System prompt ────────────────────────────────────────────────────────────
 
 SCHOOL_FOCUS = {
@@ -167,6 +171,24 @@ IMPORTANT:
 --- SCHOOL DOCUMENTS ---
 
 {context}"""
+
+
+def trim_context(text, max_tokens=MAX_CONTEXT_TOKENS):
+    """Trim context to fit within token budget using tiktoken as approximation."""
+    try:
+        import tiktoken
+        enc = tiktoken.get_encoding("cl100k_base")
+        tokens = enc.encode(text)
+        if len(tokens) > max_tokens:
+            text = enc.decode(tokens[:max_tokens])
+            text += "\n\n[... context trimmed to fit token budget ...]\n"
+        return text
+    except ImportError:
+        # Fallback: rough char-based trim (4 chars ≈ 1 token)
+        max_chars = max_tokens * 4
+        if len(text) > max_chars:
+            text = text[:max_chars] + "\n\n[... context trimmed to fit token budget ...]\n"
+        return text
 
 
 def build_system_prompt(school_focus_key, context, policy_names=None):
@@ -918,13 +940,15 @@ for key, default in [
 if "context" not in st.session_state:
     if CONTEXT_FILE.exists():
         # Local: read plaintext directly
-        st.session_state.context = CONTEXT_FILE.read_text()
+        st.session_state.context = trim_context(CONTEXT_FILE.read_text())
     elif CONTEXT_FILE_ENC.exists():
         # Cloud: decrypt from encrypted file using key in secrets
         try:
             from cryptography.fernet import Fernet
             key = st.secrets["CONTEXT_KEY"].encode()
-            st.session_state.context = Fernet(key).decrypt(CONTEXT_FILE_ENC.read_bytes()).decode()
+            st.session_state.context = trim_context(
+                Fernet(key).decrypt(CONTEXT_FILE_ENC.read_bytes()).decode()
+            )
         except Exception as e:
             st.error(f"Failed to decrypt context: {e}")
             st.session_state.context = ""

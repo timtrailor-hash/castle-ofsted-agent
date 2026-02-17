@@ -5,3 +5,4 @@ extra-streamlit-components>=0.1.60
 cryptography>=42.0.0
 pdfplumber>=0.10.0
 requests>=2.31.0
+tiktoken>=0.6.0
