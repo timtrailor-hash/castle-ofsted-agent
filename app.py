@@ -12,6 +12,7 @@ import base64
 import subprocess
 from pathlib import Path
 
+import requests
 import streamlit as st
 
 # ── Paths ────────────────────────────────────────────────────────────────────
@@ -168,34 +169,198 @@ IMPORTANT:
 {context}"""
 
 
-def build_system_prompt(school_focus_key, context):
-    return SYSTEM_PROMPT_TEMPLATE.format(
+def build_system_prompt(school_focus_key, context, policy_names=None):
+    prompt = SYSTEM_PROMPT_TEMPLATE.format(
         school_focus=SCHOOL_FOCUS[school_focus_key],
         context=context,
     )
+    if policy_names:
+        policy_list = ", ".join(policy_names)
+        prompt += (
+            "\n\n--- REAL-TIME POLICY LOOKUP ---\n\n"
+            "You have a tool called \"fetch_policy\" that can download policy documents "
+            "from the Castle Federation website in real time. Use it ONLY when the question "
+            "asks about a specific policy not already covered in the documents above.\n\n"
+            f"Available policies: {policy_list}"
+        )
+    return prompt
+
+
+# ── Policy fetching tool ────────────────────────────────────────────────────
+
+POLICIES_PAGE_URL = "https://www.castlefederation.org/Policies/"
+
+FETCH_POLICY_TOOL = {
+    "name": "fetch_policy",
+    "description": (
+        "Fetch a specific policy document from the Castle Federation website. "
+        "Use this when the question is about a school policy that isn't in the "
+        "pre-loaded documents above. Returns the full text of the policy PDF."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "policy_name": {
+                "type": "string",
+                "description": "The name of the policy to fetch, from the available policies list.",
+            }
+        },
+        "required": ["policy_name"],
+    },
+}
+
+
+def get_policy_index():
+    """Fetch the policies page and return a dict of {name: download_url}."""
+    from urllib.parse import unquote
+
+    try:
+        resp = requests.get(
+            f"https://r.jina.ai/{POLICIES_PAGE_URL}",
+            timeout=30,
+            headers={"Accept": "text/markdown"},
+        )
+        if resp.status_code != 200:
+            return {}
+        urls = re.findall(
+            r'https://www\.castlefederation\.org/admin/inc/FrontEndFiles/AutoLists/download/\?url=[^\s\)]+\.pdf',
+            resp.text, re.IGNORECASE,
+        )
+        urls += re.findall(
+            r'https://www\.castlefederation\.org/admin/inc/FrontEndFiles/AutoLists/download/\?url=[^\s\)]+%2Epdf',
+            resp.text, re.IGNORECASE,
+        )
+        urls = list(dict.fromkeys(urls))  # deduplicate
+        if not urls:
+            urls = re.findall(
+                r'https://www\.castlefederation\.org[^\s\)]*\.pdf',
+                resp.text, re.IGNORECASE,
+            )
+            urls = list(dict.fromkeys(urls))
+        index = {}
+        for url in urls:
+            name_part = unquote(url.split("url=")[-1] if "url=" in url else url.split("/")[-1])
+            name = name_part.replace("/docs/policies/", "").replace(".pdf", "").replace("_", " ").strip()
+            if name:
+                index[name] = url
+        return index
+    except Exception:
+        return {}
+
+
+def fetch_single_policy(policy_name, policy_index):
+    """Download and extract text from a single policy PDF."""
+    import io
+
+    try:
+        import pdfplumber
+    except ImportError:
+        return "PDF extraction not available (pdfplumber not installed)"
+
+    url = policy_index.get(policy_name)
+    if not url:
+        # Fuzzy match
+        policy_lower = policy_name.lower()
+        for name, u in policy_index.items():
+            if policy_lower in name.lower() or name.lower() in policy_lower:
+                url = u
+                policy_name = name
+                break
+    if not url:
+        return f"Policy '{policy_name}' not found. Available: {', '.join(policy_index.keys())}"
+    try:
+        resp = requests.get(url, timeout=30)
+        if resp.status_code != 200:
+            return f"Failed to download policy (HTTP {resp.status_code})"
+        text = ""
+        with pdfplumber.open(io.BytesIO(resp.content)) as pdf:
+            for page in pdf.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text += page_text + "\n\n"
+                for table in page.extract_tables():
+                    for row in table:
+                        cells = [str(c).strip() for c in row if c]
+                        if cells:
+                            text += " | ".join(cells) + "\n"
+        if text.strip():
+            return f"[POLICY: {policy_name}]\n\n{text.strip()}"
+        return f"No text could be extracted from {policy_name}"
+    except Exception as e:
+        return f"Error fetching policy: {e}"
 
 
 # ── API ──────────────────────────────────────────────────────────────────────
 
-def query_model(model_info, system_prompt, messages, placeholder):
+def query_model(model_info, system_prompt, messages, placeholder, policy_index=None):
     if model_info["provider"] == "anthropic":
         from anthropic import Anthropic
         client = Anthropic()
         system = [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}]
+        tools = [FETCH_POLICY_TOOL] if policy_index else None
+
         full_text = ""
-        with client.messages.stream(
-            model=model_info["model"], max_tokens=1024, system=system, messages=messages,
-        ) as stream:
+        total_usage = {"input": 0, "output": 0, "cache_read": 0, "cache_created": 0}
+
+        kwargs = dict(model=model_info["model"], max_tokens=1024, system=system, messages=messages)
+        if tools:
+            kwargs["tools"] = tools
+
+        with client.messages.stream(**kwargs) as stream:
             for text in stream.text_stream:
                 full_text += text
                 placeholder.markdown(full_text + "▌")
             resp = stream.get_final_message()
-        usage = {
-            "input": resp.usage.input_tokens, "output": resp.usage.output_tokens,
-            "cache_read": getattr(resp.usage, "cache_read_input_tokens", 0),
-            "cache_created": getattr(resp.usage, "cache_creation_input_tokens", 0),
-        }
-        return full_text, usage
+
+        total_usage["input"] += resp.usage.input_tokens
+        total_usage["output"] += resp.usage.output_tokens
+        total_usage["cache_read"] += getattr(resp.usage, "cache_read_input_tokens", 0)
+        total_usage["cache_created"] += getattr(resp.usage, "cache_creation_input_tokens", 0)
+
+        # Handle tool use — fetch policy from website
+        if resp.stop_reason == "tool_use" and policy_index:
+            tool_block = next((b for b in resp.content if b.type == "tool_use"), None)
+
+            if tool_block and tool_block.name == "fetch_policy":
+                policy_name = tool_block.input.get("policy_name", "")
+                placeholder.markdown(f"📄 *Fetching policy from school website: **{policy_name}**...*")
+
+                policy_text = fetch_single_policy(policy_name, policy_index)
+
+                # Build assistant content as dicts for the API
+                assistant_content = []
+                for block in resp.content:
+                    if block.type == "text" and block.text:
+                        assistant_content.append({"type": "text", "text": block.text})
+                    elif block.type == "tool_use":
+                        assistant_content.append({
+                            "type": "tool_use", "id": block.id,
+                            "name": block.name, "input": block.input,
+                        })
+
+                tool_messages = messages + [
+                    {"role": "assistant", "content": assistant_content},
+                    {"role": "user", "content": [
+                        {"type": "tool_result", "tool_use_id": tool_block.id, "content": policy_text}
+                    ]},
+                ]
+
+                full_text = ""
+                with client.messages.stream(
+                    model=model_info["model"], max_tokens=1024, system=system,
+                    messages=tool_messages, tools=tools,
+                ) as stream2:
+                    for text in stream2.text_stream:
+                        full_text += text
+                        placeholder.markdown(full_text + "▌")
+                    resp2 = stream2.get_final_message()
+
+                total_usage["input"] += resp2.usage.input_tokens
+                total_usage["output"] += resp2.usage.output_tokens
+                total_usage["cache_read"] += getattr(resp2.usage, "cache_read_input_tokens", 0)
+                total_usage["cache_created"] += getattr(resp2.usage, "cache_creation_input_tokens", 0)
+
+        return full_text, total_usage
     else:
         import google.generativeai as genai
         genai.configure(api_key=os.environ.get("GEMINI_API_KEY", ""))
@@ -766,6 +931,12 @@ if "context" not in st.session_state:
     else:
         st.session_state.context = ""
 
+if "policy_index" not in st.session_state:
+    try:
+        st.session_state.policy_index = get_policy_index()
+    except Exception:
+        st.session_state.policy_index = {}
+
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 
@@ -864,7 +1035,8 @@ with st.container():
             '</div>', unsafe_allow_html=True,
         )
         try:
-            sys_prompt = build_system_prompt(school_focus, st.session_state.context)
+            policy_names = list(st.session_state.get("policy_index", {}).keys())
+            sys_prompt = build_system_prompt(school_focus, st.session_state.context, policy_names)
             warmup_cache(model_info["model"], sys_prompt)
             st.session_state.cache_warmed = True
             st.session_state.warming_up = False
@@ -926,13 +1098,14 @@ with st.container():
     # ── Process last unanswered message ──
     if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
         question = st.session_state.messages[-1]["content"]
-        sys_prompt = build_system_prompt(school_focus, st.session_state.context)
+        policy_names = list(st.session_state.get("policy_index", {}).keys())
+        sys_prompt = build_system_prompt(school_focus, st.session_state.context, policy_names)
         api_msgs = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
         if len(api_msgs) > 12: api_msgs = api_msgs[-12:]
 
         placeholder = st.empty()
         try:
-            full_text, usage = query_model(model_info, sys_prompt, api_msgs, placeholder)
+            full_text, usage = query_model(model_info, sys_prompt, api_msgs, placeholder, st.session_state.get("policy_index"))
             st.session_state.token_count["input"] += usage.get("input", 0)
             st.session_state.token_count["output"] += usage.get("output", 0)
             st.session_state.token_count["cache_read"] += usage.get("cache_read", 0)
