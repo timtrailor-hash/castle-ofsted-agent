@@ -17,7 +17,8 @@ import streamlit as st
 # ── Paths ────────────────────────────────────────────────────────────────────
 
 APP_DIR = Path(__file__).parent
-CONTEXT_FILE = APP_DIR / "combined_context.md"
+CONTEXT_FILE = APP_DIR / "combined_context.md"          # local (unencrypted)
+CONTEXT_FILE_ENC = APP_DIR / "combined_context.md.enc"  # repo (encrypted)
 ENV_FILE = APP_DIR / ".env"
 LOGO_FILE = APP_DIR / "logo.png"
 TREE_FILE = APP_DIR / "tree.png"
@@ -750,7 +751,20 @@ for key, default in [
         st.session_state[key] = default
 
 if "context" not in st.session_state:
-    st.session_state.context = CONTEXT_FILE.read_text() if CONTEXT_FILE.exists() else ""
+    if CONTEXT_FILE.exists():
+        # Local: read plaintext directly
+        st.session_state.context = CONTEXT_FILE.read_text()
+    elif CONTEXT_FILE_ENC.exists():
+        # Cloud: decrypt from encrypted file using key in secrets
+        try:
+            from cryptography.fernet import Fernet
+            key = st.secrets["CONTEXT_KEY"].encode()
+            st.session_state.context = Fernet(key).decrypt(CONTEXT_FILE_ENC.read_bytes()).decode()
+        except Exception as e:
+            st.error(f"Failed to decrypt context: {e}")
+            st.session_state.context = ""
+    else:
+        st.session_state.context = ""
 
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────

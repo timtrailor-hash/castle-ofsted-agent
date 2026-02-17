@@ -2,6 +2,9 @@
 .env
 .streamlit/secrets.toml
 
+# Plaintext school documents — only encrypted version (.enc) goes to repo
+combined_context.md
+
 # Local-only files
 audio_worker.py
 audio_worker.log
