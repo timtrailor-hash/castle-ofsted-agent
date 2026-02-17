@@ -362,8 +362,10 @@ st.set_page_config(page_title="Ofsted Agent — Castle CE Federation", page_icon
 import hmac
 import hashlib
 import smtplib
+from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from extra_streamlit_components import CookieManager
 
 
 def generate_code(email, secret, window_minutes=10):
@@ -422,6 +424,30 @@ Castle CE Federation
         return False, f"Failed to send email: {e}"
 
 
+def create_auth_token(email, secret, days=7):
+    """Create a signed token that expires in N days."""
+    expiry = int(time.time()) + (days * 86400)
+    payload = f"{email.lower().strip()}:{expiry}"
+    signature = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
+    return base64.b64encode(f"{payload}:{signature}".encode()).decode()
+
+
+def verify_auth_token(token, secret):
+    """Verify a signed auth token. Returns email if valid, None if expired/invalid."""
+    try:
+        decoded = base64.b64decode(token).decode()
+        payload, signature = decoded.rsplit(":", 1)
+        expected = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
+        if signature != expected:
+            return None
+        email, expiry = payload.rsplit(":", 1)
+        if int(expiry) < int(time.time()):
+            return None
+        return email
+    except Exception:
+        return None
+
+
 def check_auth():
     """Email-based auth for @castlefederation.org. Active in cloud, skipped locally."""
     # Skip auth locally (not cloud)
@@ -436,9 +462,20 @@ def check_auth():
     if st.session_state.get("authenticated"):
         return True
 
+    # Check for remember-me cookie
+    cookie_manager = CookieManager(key="auth_cookies")
+    token = cookie_manager.get("ofsted_auth")
+    if token:
+        secret = st.secrets.get("AUTH_SECRET", "castle-fed-2026")
+        email = verify_auth_token(token, secret)
+        if email:
+            st.session_state.authenticated = True
+            st.session_state.auth_email = email
+            return True
+
     # Initialize auth state
     if "auth_step" not in st.session_state:
-        st.session_state.auth_step = "email"  # "email" or "code"
+        st.session_state.auth_step = "email"
     if "auth_email" not in st.session_state:
         st.session_state.auth_email = ""
 
@@ -450,7 +487,6 @@ def check_auth():
         st.markdown(f'<h2 style="text-align:center;color:{NAVY}">Ofsted Inspection Agent</h2>', unsafe_allow_html=True)
         st.markdown(f'<p style="text-align:center;color:{GOLD};font-style:italic">"Do everything in love" — 1 Corinthians 16:14</p>', unsafe_allow_html=True)
         st.markdown("---")
-        # Fix input visibility against dark theme
         st.markdown('<style>input[type="text"], input[type="password"] { color: #1a1a2e !important; background: #ffffff !important; -webkit-text-fill-color: #1a1a2e !important; }</style>', unsafe_allow_html=True)
 
         if st.session_state.auth_step == "email":
@@ -480,6 +516,11 @@ def check_auth():
                     secret = st.secrets.get("AUTH_SECRET", "castle-fed-2026")
                     if verify_code(st.session_state.auth_email, code.strip(), secret):
                         st.session_state.authenticated = True
+                        # Set 7-day remember-me cookie
+                        token = create_auth_token(st.session_state.auth_email, secret, days=7)
+                        cookie_manager = CookieManager(key="auth_cookies_set")
+                        cookie_manager.set("ofsted_auth", token,
+                                           expires_at=datetime.now() + timedelta(days=7))
                         st.rerun()
                     else:
                         st.error("Invalid or expired code. Please try again.")
