@@ -5,7 +5,8 @@
 # Plaintext school documents — only encrypted version (.enc) goes to repo
 combined_context.md
 
-# Local-only files
+# Local-only scripts (contain keys or local paths)
+refresh_context.py
 audio_worker.py
 audio_worker.log
 audio_state.json
