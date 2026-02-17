@@ -860,7 +860,7 @@ with st.container():
             '<div class="warmup-overlay">'
             '<div class="spinner"></div>'
             '<h2>Loading School Documents</h2>'
-            '<p>Caching 177,000 tokens of school documents...<br>This takes ~15 seconds on first load, then answers are fast.</p>'
+            f'<p>Caching ~{len(st.session_state.context) // 4:,} tokens of school documents...<br>This takes ~15 seconds on first load, then answers are fast.</p>'
             '</div>', unsafe_allow_html=True,
         )
         try:
