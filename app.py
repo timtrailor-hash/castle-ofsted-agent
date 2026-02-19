@@ -1204,254 +1204,253 @@ with st.sidebar:
 
 # ── Main area ────────────────────────────────────────────────────────────────
 
-with st.container():
-    if not st.session_state.context:
-        st.error("No documents loaded. Run `crawl_and_prepare.py` first.")
-        st.stop()
+if not st.session_state.context:
+    st.error("No documents loaded. Run `crawl_and_prepare.py` first.")
+    st.stop()
 
-    # ── Build file index on first run (local only — no school docs in cloud) ──
-    if "file_index" not in st.session_state:
-        st.session_state.file_index = build_file_index() if not IS_CLOUD else {}
+# ── Build file index on first run (local only — no school docs in cloud) ──
+if "file_index" not in st.session_state:
+    st.session_state.file_index = build_file_index() if not IS_CLOUD else {}
 
-    # ── Cache warmup ──
-    shared_chat = get_shared_chat()
-    # Skip warmup overlay if shared chat already has messages (cache warm from another session)
-    if shared_chat.get_message_count() > 0 and not st.session_state.cache_warmed:
+# ── Cache warmup ──
+shared_chat = get_shared_chat()
+# Skip warmup overlay if shared chat already has messages (cache warm from another session)
+if shared_chat.get_message_count() > 0 and not st.session_state.cache_warmed:
+    st.session_state.cache_warmed = True
+
+if not st.session_state.cache_warmed and model_info["provider"] == "anthropic" and not st.session_state.warming_up and not st.session_state.get("warmup_failed"):
+    if IS_CLOUD:
+        # Cloud: skip blocking warmup — cache warms on the first real question.
         st.session_state.cache_warmed = True
-
-    if not st.session_state.cache_warmed and model_info["provider"] == "anthropic" and not st.session_state.warming_up and not st.session_state.get("warmup_failed"):
-        if IS_CLOUD:
-            # Cloud: skip blocking warmup — cache warms on the first real question.
-            # The blocking warmup can hang or loop on Cloud due to cold starts.
-            st.session_state.cache_warmed = True
-        else:
-            st.session_state.warming_up = True
-            st.markdown(
-                '<div class="warmup-overlay">'
-                '<div class="spinner"></div>'
-                '<h2>Loading School Documents</h2>'
-                f'<p>Caching ~{len(st.session_state.context) // 4:,} tokens of school documents...<br>This takes ~15 seconds on first load, then answers are fast.</p>'
-                '</div>', unsafe_allow_html=True,
-            )
-            try:
-                policy_names = list(st.session_state.get("policy_index", {}).keys())
-                sys_prompt = build_system_prompt(school_focus, st.session_state.context, policy_names)
-                warmup_cache(model_info["model"], sys_prompt)
-                st.session_state.cache_warmed = True
-                st.session_state.warming_up = False
-                st.rerun()
-            except Exception as e:
-                st.error(f"Cache warmup failed: {e}. The cache will warm on your first question instead.")
-                st.session_state.warming_up = False
-                st.session_state.warmup_failed = True
-
-    if st.session_state.cache_warmed and not shared_chat.messages:
-        if IS_CLOUD:
-            st.markdown('<div class="ready-banner">Ready — ask a question below. The first answer may take ~20 seconds while documents load.</div>', unsafe_allow_html=True)
-        else:
-            n_files = len(st.session_state.get("file_index", {}))
-            st.markdown(f'<div class="ready-banner">Ready — documents cached, {n_files:,} files indexed. Ask a question below.</div>', unsafe_allow_html=True)
-
-    # ── Chat history (from shared state) ──
-    for i, msg in enumerate(shared_chat.messages):
-        if msg["role"] == "user":
-            user_label = f"{msg.get('user_name', 'Governor')}'s Question"
-            st.markdown(
-                f'<div class="q-bubble">'
-                f'<div class="q-label">{user_label}</div>'
-                f'{msg["content"]}'
-                f'</div>', unsafe_allow_html=True,
-            )
-        else:
-            parsed = msg.get("parsed", {})
-            answer = parsed.get("answer", msg["content"]) if parsed else msg["content"]
-            evidence = parsed.get("evidence", "") if parsed else ""
-            source = parsed.get("source", "") if parsed else ""
-
-            # Show who triggered the answer and which model
-            answering = msg.get("answering_user", "")
-            answer_model = msg.get("model", "")
-            label_parts = ["Answer"]
-            if answering:
-                label_parts.append(f"for {answering}")
-            if answer_model:
-                label_parts.append(f"&middot; {answer_model}")
-            answer_label = " ".join(label_parts)
-
-            answer_html = format_bullets(answer)
-            html = f'<div class="a-bubble"><div class="a-label">{answer_label}</div>{answer_html}'
-            if evidence:
-                evidence_html = format_bullets(evidence)
-                html += f'<div class="evidence-inline"><strong>📊 Evidence:</strong>{evidence_html}</div>'
-            html += '</div>'
-            st.markdown(html, unsafe_allow_html=True)
-
-            # Source document references
-            if source:
-                citations = parse_source_citations(source)
-                if IS_CLOUD:
-                    if citations:
-                        refs = " · ".join(f"📄 {c}" for c in citations[:5])
-                        st.markdown(f'<div class="source-label">{refs}</div>', unsafe_allow_html=True)
-                else:
-                    idx = st.session_state.get("file_index", {})
-                    for fi, cite in enumerate(citations[:5]):
-                        file_match = match_citation(cite, idx) if idx else None
-                        if file_match:
-                            if st.button(f"📂  Open: {file_match[0]}", key=f"doc_{i}_{fi}", use_container_width=True):
-                                subprocess.Popen(["open", file_match[1]])
-                                st.toast(f"Opened: {file_match[0]}")
-                        else:
-                            st.caption(f"📄 {cite}")
-
-    # ── Processing indicator (visible to all sessions) ──
-    proc = shared_chat.get_processing()
-    if proc:
-        elapsed = int(time.time() - proc["started_at"])
+    else:
+        st.session_state.warming_up = True
         st.markdown(
-            f'<div class="processing-banner">'
-            f'<div class="proc-label">Processing</div>'
-            f'<strong>{proc["user_name"]}</strong> is asking: '
-            f'<em>"{proc["question"][:100]}"</em> &middot; {proc["model"]} &middot; {elapsed}s'
-            f'</div>', unsafe_allow_html=True,
+            '<div class="warmup-overlay">'
+            '<div class="spinner"></div>'
+            '<h2>Loading School Documents</h2>'
+            f'<p>Caching ~{len(st.session_state.context) // 4:,} tokens of school documents...<br>This takes ~15 seconds on first load, then answers are fast.</p>'
+            '</div>', unsafe_allow_html=True,
         )
-
-    # ── Process answer (only the session that submitted the question) ──
-    if st.session_state.pending_answer and shared_chat.messages and shared_chat.messages[-1]["role"] == "user":
-        question = shared_chat.messages[-1]["content"]
-        policy_names = list(st.session_state.get("policy_index", {}).keys())
-        sys_prompt = build_system_prompt(school_focus, st.session_state.context, policy_names)
-        api_msgs = [{"role": m["role"], "content": m["content"]} for m in shared_chat.messages]
-        if len(api_msgs) > 12: api_msgs = api_msgs[-12:]
-
-        placeholder = st.empty()
         try:
-            full_text, usage = query_model(model_info, sys_prompt, api_msgs, placeholder, st.session_state.get("policy_index"))
-            st.session_state.token_count["input"] += usage.get("input", 0)
-            st.session_state.token_count["output"] += usage.get("output", 0)
-            st.session_state.token_count["cache_read"] += usage.get("cache_read", 0)
-            if usage.get("cache_read", 0) > 0 or usage.get("cache_created", 0) > 0:
-                st.session_state.cache_warmed = True
-
-            parsed = parse_response(full_text)
-            shared_chat.add_assistant_message(
-                content=full_text,
-                parsed=parsed,
-                model=model_choice,
-                school_focus=school_focus,
-                usage=usage,
-                answering_user=get_user_name(),
-            )
-            shared_chat.clear_processing()
-            st.session_state.pending_answer = False
-            log_event("answer",
-                      email=get_user_email(),
-                      school=school_focus, model=model_choice,
-                      input_mode=input_mode.lower(),
-                      question=question,
-                      answer=parsed.get("answer", ""),
-                      sources=parsed.get("source", ""),
-                      tokens_in=usage.get("input", 0),
-                      tokens_out=usage.get("output", 0),
-                      cache_hit=usage.get("cache_read", 0) > 0)
-            placeholder.empty()
+            policy_names = list(st.session_state.get("policy_index", {}).keys())
+            sys_prompt = build_system_prompt(school_focus, st.session_state.context, policy_names)
+            warmup_cache(model_info["model"], sys_prompt)
+            st.session_state.cache_warmed = True
+            st.session_state.warming_up = False
             st.rerun()
         except Exception as e:
-            placeholder.error(f"Error: {e}")
-            shared_chat.add_error_message(str(e))
-            shared_chat.clear_processing()
-            st.session_state.pending_answer = False
+            st.error(f"Cache warmup failed: {e}. The cache will warm on your first question instead.")
+            st.session_state.warming_up = False
+            st.session_state.warmup_failed = True
 
-    # ── Live transcript (at bottom, just above input) ──
-    if input_mode == "Audio (Mic)" and audio_worker_running():
-        audio_state = read_audio_state()
-        status = audio_state.get("status", "")
-        transcript = audio_state.get("transcript", "")
-        current_utterance = audio_state.get("current_utterance", "")
+if st.session_state.cache_warmed and not shared_chat.messages:
+    if IS_CLOUD:
+        st.markdown('<div class="ready-banner">Ready — ask a question below. The first answer may take ~20 seconds while documents load.</div>', unsafe_allow_html=True)
+    else:
+        n_files = len(st.session_state.get("file_index", {}))
+        st.markdown(f'<div class="ready-banner">Ready — documents cached, {n_files:,} files indexed. Ask a question below.</div>', unsafe_allow_html=True)
 
-        if status == "loading_whisper":
-            st.markdown(
-                '<div class="transcript-banner">'
-                '<span class="label">🎙️ Microphone</span>'
-                'Loading speech recognition model... (first time takes ~10s)'
-                '</div>', unsafe_allow_html=True,
-            )
-        elif transcript or current_utterance:
-            # Show recent transcript
-            recent = transcript[-200:] if len(transcript) > 200 else transcript
-            st.markdown(
-                f'<div class="transcript-banner">'
-                f'<span class="label">🎙️ Live Transcript</span>'
-                f'<span class="live">{recent}</span>'
-                f'</div>', unsafe_allow_html=True,
-            )
-            # Show current utterance being built + submit button
-            if current_utterance:
-                tc1, tc2 = st.columns([4, 1])
-                with tc1:
-                    st.markdown(
-                        f'<div style="background:#1e2238;color:{GOLD};padding:8px 16px;border-radius:8px;'
-                        f'font-size:0.85em;border:1px dashed {GOLD};">'
-                        f'<strong>Capturing:</strong> {current_utterance}'
-                        f'<span style="color:#8890b0;font-size:0.85em"> — auto-submits after 3.5s pause</span>'
-                        f'</div>', unsafe_allow_html=True,
-                    )
-                with tc2:
-                    if st.button("⏎ Submit", key="force_submit", use_container_width=True, type="primary"):
-                        try:
-                            state = json.loads(AUDIO_STATE_FILE.read_text()) if AUDIO_STATE_FILE.exists() else {}
-                            state["force_submit"] = True
-                            AUDIO_STATE_FILE.write_text(json.dumps(state))
-                        except:
-                            pass
-                        time.sleep(0.5)
-                        st.rerun()
-        else:
-            st.markdown(
-                '<div class="transcript-banner">'
-                '<span class="label">🎙️ Listening</span>'
-                'Waiting for speech...'
-                '</div>', unsafe_allow_html=True,
-            )
+# ── Chat history (from shared state) ──
+for i, msg in enumerate(shared_chat.messages):
+    if msg["role"] == "user":
+        user_label = f"{msg.get('user_name', 'Governor')}'s Question"
+        st.markdown(
+            f'<div class="q-bubble">'
+            f'<div class="q-label">{user_label}</div>'
+            f'{msg["content"]}'
+            f'</div>', unsafe_allow_html=True,
+        )
+    else:
+        parsed = msg.get("parsed", {})
+        answer = parsed.get("answer", msg["content"]) if parsed else msg["content"]
+        evidence = parsed.get("evidence", "") if parsed else ""
+        source = parsed.get("source", "") if parsed else ""
 
-        # Auto-process detected questions
-        for q in audio_state.get("questions", []):
-            if q not in st.session_state.processed_questions:
-                st.session_state.processed_questions.add(q)
-                clear_audio_questions()
-                shared_chat.add_user_message(q, get_user_name(), get_user_email(), "audio")
-                shared_chat.set_processing(get_user_name(), q, model_choice)
-                st.session_state.pending_answer = True
-                log_event("question", email=get_user_email(),
-                          school=school_focus, model=model_choice,
-                          input_mode="audio", question=q)
-                st.rerun()
+        # Show who triggered the answer and which model
+        answering = msg.get("answering_user", "")
+        answer_model = msg.get("model", "")
+        label_parts = ["Answer"]
+        if answering:
+            label_parts.append(f"for {answering}")
+        if answer_model:
+            label_parts.append(f"&middot; {answer_model}")
+        answer_label = " ".join(label_parts)
 
-    # ── Chat input (always at bottom) ──
-    question = st.chat_input("Ask an Ofsted inspection question...")
-    if question:
-        shared_chat.add_user_message(question, get_user_name(), get_user_email(), "text")
-        shared_chat.set_processing(get_user_name(), question, model_choice)
-        st.session_state.pending_answer = True
-        log_event("question", email=get_user_email(),
+        answer_html = format_bullets(answer)
+        html = f'<div class="a-bubble"><div class="a-label">{answer_label}</div>{answer_html}'
+        if evidence:
+            evidence_html = format_bullets(evidence)
+            html += f'<div class="evidence-inline"><strong>📊 Evidence:</strong>{evidence_html}</div>'
+        html += '</div>'
+        st.markdown(html, unsafe_allow_html=True)
+
+        # Source document references
+        if source:
+            citations = parse_source_citations(source)
+            if IS_CLOUD:
+                if citations:
+                    refs = " · ".join(f"📄 {c}" for c in citations[:5])
+                    st.markdown(f'<div class="source-label">{refs}</div>', unsafe_allow_html=True)
+            else:
+                idx = st.session_state.get("file_index", {})
+                for fi, cite in enumerate(citations[:5]):
+                    file_match = match_citation(cite, idx) if idx else None
+                    if file_match:
+                        if st.button(f"📂  Open: {file_match[0]}", key=f"doc_{i}_{fi}", use_container_width=True):
+                            subprocess.Popen(["open", file_match[1]])
+                            st.toast(f"Opened: {file_match[0]}")
+                    else:
+                        st.caption(f"📄 {cite}")
+
+# ── Processing indicator (visible to all sessions) ──
+proc = shared_chat.get_processing()
+if proc:
+    elapsed = int(time.time() - proc["started_at"])
+    st.markdown(
+        f'<div class="processing-banner">'
+        f'<div class="proc-label">Processing</div>'
+        f'<strong>{proc["user_name"]}</strong> is asking: '
+        f'<em>"{proc["question"][:100]}"</em> &middot; {proc["model"]} &middot; {elapsed}s'
+        f'</div>', unsafe_allow_html=True,
+    )
+
+# ── Process answer (only the session that submitted the question) ──
+if st.session_state.pending_answer and shared_chat.messages and shared_chat.messages[-1]["role"] == "user":
+    question = shared_chat.messages[-1]["content"]
+    policy_names = list(st.session_state.get("policy_index", {}).keys())
+    sys_prompt = build_system_prompt(school_focus, st.session_state.context, policy_names)
+    api_msgs = [{"role": m["role"], "content": m["content"]} for m in shared_chat.messages]
+    if len(api_msgs) > 12: api_msgs = api_msgs[-12:]
+
+    placeholder = st.empty()
+    try:
+        full_text, usage = query_model(model_info, sys_prompt, api_msgs, placeholder, st.session_state.get("policy_index"))
+        st.session_state.token_count["input"] += usage.get("input", 0)
+        st.session_state.token_count["output"] += usage.get("output", 0)
+        st.session_state.token_count["cache_read"] += usage.get("cache_read", 0)
+        if usage.get("cache_read", 0) > 0 or usage.get("cache_created", 0) > 0:
+            st.session_state.cache_warmed = True
+
+        parsed = parse_response(full_text)
+        shared_chat.add_assistant_message(
+            content=full_text,
+            parsed=parsed,
+            model=model_choice,
+            school_focus=school_focus,
+            usage=usage,
+            answering_user=get_user_name(),
+        )
+        shared_chat.clear_processing()
+        st.session_state.pending_answer = False
+        log_event("answer",
+                  email=get_user_email(),
                   school=school_focus, model=model_choice,
-                  input_mode="text", question=question)
+                  input_mode=input_mode.lower(),
+                  question=question,
+                  answer=parsed.get("answer", ""),
+                  sources=parsed.get("source", ""),
+                  tokens_in=usage.get("input", 0),
+                  tokens_out=usage.get("output", 0),
+                  cache_hit=usage.get("cache_read", 0) > 0)
+        placeholder.empty()
         st.rerun()
+    except Exception as e:
+        placeholder.error(f"Error: {e}")
+        shared_chat.add_error_message(str(e))
+        shared_chat.clear_processing()
+        st.session_state.pending_answer = False
+
+# ── Live transcript (at bottom, just above input) ──
+if input_mode == "Audio (Mic)" and audio_worker_running():
+    audio_state = read_audio_state()
+    status = audio_state.get("status", "")
+    transcript = audio_state.get("transcript", "")
+    current_utterance = audio_state.get("current_utterance", "")
+
+    if status == "loading_whisper":
+        st.markdown(
+            '<div class="transcript-banner">'
+            '<span class="label">🎙️ Microphone</span>'
+            'Loading speech recognition model... (first time takes ~10s)'
+            '</div>', unsafe_allow_html=True,
+        )
+    elif transcript or current_utterance:
+        recent = transcript[-200:] if len(transcript) > 200 else transcript
+        st.markdown(
+            f'<div class="transcript-banner">'
+            f'<span class="label">🎙️ Live Transcript</span>'
+            f'<span class="live">{recent}</span>'
+            f'</div>', unsafe_allow_html=True,
+        )
+        if current_utterance:
+            tc1, tc2 = st.columns([4, 1])
+            with tc1:
+                st.markdown(
+                    f'<div style="background:#1e2238;color:{GOLD};padding:8px 16px;border-radius:8px;'
+                    f'font-size:0.85em;border:1px dashed {GOLD};">'
+                    f'<strong>Capturing:</strong> {current_utterance}'
+                    f'<span style="color:#8890b0;font-size:0.85em"> — auto-submits after 3.5s pause</span>'
+                    f'</div>', unsafe_allow_html=True,
+                )
+            with tc2:
+                if st.button("⏎ Submit", key="force_submit", use_container_width=True, type="primary"):
+                    try:
+                        state = json.loads(AUDIO_STATE_FILE.read_text()) if AUDIO_STATE_FILE.exists() else {}
+                        state["force_submit"] = True
+                        AUDIO_STATE_FILE.write_text(json.dumps(state))
+                    except:
+                        pass
+                    time.sleep(0.5)
+                    st.rerun()
+    else:
+        st.markdown(
+            '<div class="transcript-banner">'
+            '<span class="label">🎙️ Listening</span>'
+            'Waiting for speech...'
+            '</div>', unsafe_allow_html=True,
+        )
+
+    # Auto-process detected questions
+    for q in audio_state.get("questions", []):
+        if q not in st.session_state.processed_questions:
+            st.session_state.processed_questions.add(q)
+            clear_audio_questions()
+            shared_chat.add_user_message(q, get_user_name(), get_user_email(), "audio")
+            shared_chat.set_processing(get_user_name(), q, model_choice)
+            st.session_state.pending_answer = True
+            log_event("question", email=get_user_email(),
+                      school=school_focus, model=model_choice,
+                      input_mode="audio", question=q)
+            st.rerun()
+
+# ── Chat input (always at bottom) ──
+question = st.chat_input("Ask an Ofsted inspection question...")
+if question:
+    shared_chat.add_user_message(question, get_user_name(), get_user_email(), "text")
+    shared_chat.set_processing(get_user_name(), question, model_choice)
+    st.session_state.pending_answer = True
+    log_event("question", email=get_user_email(),
+              school=school_focus, model=model_choice,
+              input_mode="text", question=question)
+    st.rerun()
 
 
 # ── Auto-refresh polling (all sessions) ──────────────────────────────────────
-# Only poll once the cache is warmed (or warmup was skipped). Polling before
-# that would restart a failed warmup in an infinite loop.
+# Uses st.fragment to poll without full-page reruns. When new messages are
+# detected, triggers a full app rerun to update the chat display.
+
+@st.fragment(run_every=3)
+def _poll_shared_chat():
+    sc = get_shared_chat()
+    count = sc.get_message_count()
+    if count != st.session_state.get("last_msg_count", 0):
+        st.session_state.last_msg_count = count
+        st.rerun(scope="app")
+    # Also rerun while processing is active (to update the elapsed timer)
+    if sc.get_processing() is not None:
+        st.rerun(scope="app")
+    # Heartbeat to keep active users alive
+    sc.heartbeat(get_user_email(), get_user_name())
 
 if st.session_state.get("cache_warmed") or st.session_state.get("warmup_failed"):
-    shared_chat = get_shared_chat()
-    _current_count = shared_chat.get_message_count()
-
-    # If new messages appeared, rerun immediately (no sleep) for snappy updates
-    if _current_count != st.session_state.last_msg_count:
-        st.session_state.last_msg_count = _current_count
-        st.rerun()
-
-    # Heartbeat poll — keeps tabs in sync
-    time.sleep(3)
-    st.rerun()
+    _poll_shared_chat()
