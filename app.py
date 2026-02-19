@@ -1219,7 +1219,7 @@ with st.container():
     if shared_chat.get_message_count() > 0 and not st.session_state.cache_warmed:
         st.session_state.cache_warmed = True
 
-    if not st.session_state.cache_warmed and model_info["provider"] == "anthropic" and not st.session_state.warming_up:
+    if not st.session_state.cache_warmed and model_info["provider"] == "anthropic" and not st.session_state.warming_up and not st.session_state.get("warmup_failed"):
         st.session_state.warming_up = True
         st.markdown(
             '<div class="warmup-overlay">'
@@ -1236,8 +1236,9 @@ with st.container():
             st.session_state.warming_up = False
             st.rerun()
         except Exception as e:
-            st.error(f"Cache warmup failed: {e}")
+            st.error(f"Cache warmup failed: {e}. The cache will warm on your first question instead.")
             st.session_state.warming_up = False
+            st.session_state.warmup_failed = True
 
     elif st.session_state.cache_warmed and not shared_chat.messages:
         if IS_CLOUD:
@@ -1434,17 +1435,18 @@ with st.container():
 
 
 # ── Auto-refresh polling (all sessions) ──────────────────────────────────────
-# Every tab continuously polls so it picks up messages from other sessions.
-# st.chat_input preserves typed text across reruns, so this won't interrupt typing.
+# Only poll once the cache is warmed (or warmup was skipped). Polling before
+# that would restart a failed warmup in an infinite loop.
 
-shared_chat = get_shared_chat()
-_current_count = shared_chat.get_message_count()
+if st.session_state.get("cache_warmed") or st.session_state.get("warmup_failed"):
+    shared_chat = get_shared_chat()
+    _current_count = shared_chat.get_message_count()
 
-# If new messages appeared, rerun immediately (no sleep) for snappy updates
-if _current_count != st.session_state.last_msg_count:
-    st.session_state.last_msg_count = _current_count
+    # If new messages appeared, rerun immediately (no sleep) for snappy updates
+    if _current_count != st.session_state.last_msg_count:
+        st.session_state.last_msg_count = _current_count
+        st.rerun()
+
+    # Heartbeat poll — keeps tabs in sync
+    time.sleep(3)
     st.rerun()
-
-# Always poll — this is the heartbeat that keeps tabs in sync
-time.sleep(3)
-st.rerun()
