@@ -1220,32 +1220,37 @@ with st.container():
         st.session_state.cache_warmed = True
 
     if not st.session_state.cache_warmed and model_info["provider"] == "anthropic" and not st.session_state.warming_up and not st.session_state.get("warmup_failed"):
-        st.session_state.warming_up = True
-        st.markdown(
-            '<div class="warmup-overlay">'
-            '<div class="spinner"></div>'
-            '<h2>Loading School Documents</h2>'
-            f'<p>Caching ~{len(st.session_state.context) // 4:,} tokens of school documents...<br>This takes ~15 seconds on first load, then answers are fast.</p>'
-            '</div>', unsafe_allow_html=True,
-        )
-        try:
-            policy_names = list(st.session_state.get("policy_index", {}).keys())
-            sys_prompt = build_system_prompt(school_focus, st.session_state.context, policy_names)
-            warmup_cache(model_info["model"], sys_prompt)
-            st.session_state.cache_warmed = True
-            st.session_state.warming_up = False
-            st.rerun()
-        except Exception as e:
-            st.error(f"Cache warmup failed: {e}. The cache will warm on your first question instead.")
-            st.session_state.warming_up = False
-            st.session_state.warmup_failed = True
-
-    elif st.session_state.cache_warmed and not shared_chat.messages:
         if IS_CLOUD:
-            st.markdown('<div class="ready-banner">✅ Ready — documents cached. Ask a question below.</div>', unsafe_allow_html=True)
+            # Cloud: skip blocking warmup — cache warms on the first real question.
+            # The blocking warmup can hang or loop on Cloud due to cold starts.
+            st.session_state.cache_warmed = True
+        else:
+            st.session_state.warming_up = True
+            st.markdown(
+                '<div class="warmup-overlay">'
+                '<div class="spinner"></div>'
+                '<h2>Loading School Documents</h2>'
+                f'<p>Caching ~{len(st.session_state.context) // 4:,} tokens of school documents...<br>This takes ~15 seconds on first load, then answers are fast.</p>'
+                '</div>', unsafe_allow_html=True,
+            )
+            try:
+                policy_names = list(st.session_state.get("policy_index", {}).keys())
+                sys_prompt = build_system_prompt(school_focus, st.session_state.context, policy_names)
+                warmup_cache(model_info["model"], sys_prompt)
+                st.session_state.cache_warmed = True
+                st.session_state.warming_up = False
+                st.rerun()
+            except Exception as e:
+                st.error(f"Cache warmup failed: {e}. The cache will warm on your first question instead.")
+                st.session_state.warming_up = False
+                st.session_state.warmup_failed = True
+
+    if st.session_state.cache_warmed and not shared_chat.messages:
+        if IS_CLOUD:
+            st.markdown('<div class="ready-banner">Ready — ask a question below. The first answer may take ~20 seconds while documents load.</div>', unsafe_allow_html=True)
         else:
             n_files = len(st.session_state.get("file_index", {}))
-            st.markdown(f'<div class="ready-banner">✅ Ready — documents cached, {n_files:,} files indexed. Ask a question below.</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="ready-banner">Ready — documents cached, {n_files:,} files indexed. Ask a question below.</div>', unsafe_allow_html=True)
 
     # ── Chat history (from shared state) ──
     for i, msg in enumerate(shared_chat.messages):
