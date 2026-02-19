@@ -16,6 +16,8 @@ import requests
 import streamlit as st
 from datetime import datetime as _dt
 
+from shared_chat import get_shared_chat, get_display_name
+
 # ── Paths ────────────────────────────────────────────────────────────────────
 
 APP_DIR = Path(__file__).parent
@@ -33,6 +35,23 @@ PYTHON_PATH = Path.home() / "anaconda3" / "bin" / "python"
 # ── Environment detection ────────────────────────────────────────────────────
 
 IS_CLOUD = not Path.home().joinpath("Desktop", "school docs").exists()
+
+
+# ── User identity helpers ────────────────────────────────────────────────────
+
+def get_user_email():
+    if st.session_state.get("auth_email"):
+        return st.session_state["auth_email"]
+    # Local mode: each tab gets a unique session identity so active_users
+    # can distinguish them (auth is skipped locally → no email set).
+    if "local_session_id" not in st.session_state:
+        import uuid
+        st.session_state.local_session_id = uuid.uuid4().hex[:6]
+    return f"local-{st.session_state.local_session_id}@localhost"
+
+
+def get_user_name():
+    return get_display_name(get_user_email())
 
 # ── Load API keys (Streamlit secrets first, then .env fallback) ──────────────
 
@@ -1018,15 +1037,51 @@ st.markdown(f"""
 
     /* Motto */
     .motto {{ color: {GOLD}; font-style: italic; font-size: 0.85em; text-align: center; padding: 0.5em; }}
+
+    /* Processing banner */
+    .processing-banner {{
+        background: linear-gradient(135deg, {NAVY} 0%, #3d4260 100%);
+        color: white;
+        padding: 14px 20px;
+        border-radius: 10px;
+        margin: 8px 0 16px 0;
+        border-left: 4px solid {GOLD};
+        animation: pulse-bg 2s ease-in-out infinite;
+    }}
+    .processing-banner .proc-label {{
+        color: {GOLD};
+        font-size: 0.75em;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }}
+    @keyframes pulse-bg {{
+        0%, 100% {{ opacity: 1; }}
+        50% {{ opacity: 0.85; }}
+    }}
+
+    /* Active users pill */
+    .active-users {{
+        color: #95a5a5;
+        font-size: 0.85em;
+        line-height: 1.4;
+    }}
+    .active-users .online-dot {{
+        display: inline-block;
+        width: 8px; height: 8px;
+        background: #2dcc70;
+        border-radius: 50%;
+        margin-right: 4px;
+    }}
 </style>
 """, unsafe_allow_html=True)
 
 # ── Session state ────────────────────────────────────────────────────────────
 
 for key, default in [
-    ("messages", []), ("evidence_history", []),
     ("cache_warmed", False), ("warming_up", False), ("processed_questions", set()),
     ("token_count", {"input": 0, "output": 0, "cache_read": 0}),
+    ("last_msg_count", 0), ("pending_answer", False),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -1109,11 +1164,27 @@ with st.sidebar:
                 st.rerun()
 
     st.markdown("---")
+
+    # Active users
+    shared_chat = get_shared_chat()
+    active = shared_chat.heartbeat(get_user_email(), get_user_name())
+    if active:
+        names = sorted(set(info["name"] for info in active.values()))
+        names_str = ", ".join(names)
+        st.markdown(f"Online: **{names_str}**")
+
     st.markdown("### Session")
-    n_questions = len([m for m in st.session_state.messages if m["role"] == "user"])
+    n_questions = len([m for m in shared_chat.messages if m["role"] == "user"])
     total_tok = st.session_state.token_count["input"] + st.session_state.token_count["output"]
     st.markdown(f"Questions: **{n_questions}** · Tokens: **{total_tok:,}**")
     st.markdown(f"Cache: **{'Warmed' if st.session_state.cache_warmed else 'Cold'}**")
+
+    if st.button("New Chat", use_container_width=True):
+        shared_chat.reset_chat()
+        st.session_state.last_msg_count = 0
+        st.session_state.pending_answer = False
+        st.session_state.processed_questions = set()
+        st.rerun()
 
     st.markdown("---")
     st.markdown("### Budget ($50)")
@@ -1143,6 +1214,11 @@ with st.container():
         st.session_state.file_index = build_file_index() if not IS_CLOUD else {}
 
     # ── Cache warmup ──
+    shared_chat = get_shared_chat()
+    # Skip warmup overlay if shared chat already has messages (cache warm from another session)
+    if shared_chat.get_message_count() > 0 and not st.session_state.cache_warmed:
+        st.session_state.cache_warmed = True
+
     if not st.session_state.cache_warmed and model_info["provider"] == "anthropic" and not st.session_state.warming_up:
         st.session_state.warming_up = True
         st.markdown(
@@ -1163,19 +1239,20 @@ with st.container():
             st.error(f"Cache warmup failed: {e}")
             st.session_state.warming_up = False
 
-    elif st.session_state.cache_warmed and not st.session_state.messages:
+    elif st.session_state.cache_warmed and not shared_chat.messages:
         if IS_CLOUD:
             st.markdown('<div class="ready-banner">✅ Ready — documents cached. Ask a question below.</div>', unsafe_allow_html=True)
         else:
             n_files = len(st.session_state.get("file_index", {}))
             st.markdown(f'<div class="ready-banner">✅ Ready — documents cached, {n_files:,} files indexed. Ask a question below.</div>', unsafe_allow_html=True)
 
-    # ── Chat history ──
-    for i, msg in enumerate(st.session_state.messages):
+    # ── Chat history (from shared state) ──
+    for i, msg in enumerate(shared_chat.messages):
         if msg["role"] == "user":
+            user_label = f"{msg.get('user_name', 'Governor')}'s Question"
             st.markdown(
                 f'<div class="q-bubble">'
-                f'<div class="q-label">Inspector Question</div>'
+                f'<div class="q-label">{user_label}</div>'
                 f'{msg["content"]}'
                 f'</div>', unsafe_allow_html=True,
             )
@@ -1185,8 +1262,18 @@ with st.container():
             evidence = parsed.get("evidence", "") if parsed else ""
             source = parsed.get("source", "") if parsed else ""
 
+            # Show who triggered the answer and which model
+            answering = msg.get("answering_user", "")
+            answer_model = msg.get("model", "")
+            label_parts = ["Answer"]
+            if answering:
+                label_parts.append(f"for {answering}")
+            if answer_model:
+                label_parts.append(f"&middot; {answer_model}")
+            answer_label = " ".join(label_parts)
+
             answer_html = format_bullets(answer)
-            html = f'<div class="a-bubble"><div class="a-label">Governor Response</div>{answer_html}'
+            html = f'<div class="a-bubble"><div class="a-label">{answer_label}</div>{answer_html}'
             if evidence:
                 evidence_html = format_bullets(evidence)
                 html += f'<div class="evidence-inline"><strong>📊 Evidence:</strong>{evidence_html}</div>'
@@ -1197,12 +1284,10 @@ with st.container():
             if source:
                 citations = parse_source_citations(source)
                 if IS_CLOUD:
-                    # Cloud mode: show source names as styled references
                     if citations:
                         refs = " · ".join(f"📄 {c}" for c in citations[:5])
                         st.markdown(f'<div class="source-label">{refs}</div>', unsafe_allow_html=True)
                 else:
-                    # Local mode: clickable buttons that open files
                     idx = st.session_state.get("file_index", {})
                     for fi, cite in enumerate(citations[:5]):
                         file_match = match_citation(cite, idx) if idx else None
@@ -1213,12 +1298,24 @@ with st.container():
                         else:
                             st.caption(f"📄 {cite}")
 
-    # ── Process last unanswered message ──
-    if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
-        question = st.session_state.messages[-1]["content"]
+    # ── Processing indicator (visible to all sessions) ──
+    proc = shared_chat.get_processing()
+    if proc:
+        elapsed = int(time.time() - proc["started_at"])
+        st.markdown(
+            f'<div class="processing-banner">'
+            f'<div class="proc-label">Processing</div>'
+            f'<strong>{proc["user_name"]}</strong> is asking: '
+            f'<em>"{proc["question"][:100]}"</em> &middot; {proc["model"]} &middot; {elapsed}s'
+            f'</div>', unsafe_allow_html=True,
+        )
+
+    # ── Process answer (only the session that submitted the question) ──
+    if st.session_state.pending_answer and shared_chat.messages and shared_chat.messages[-1]["role"] == "user":
+        question = shared_chat.messages[-1]["content"]
         policy_names = list(st.session_state.get("policy_index", {}).keys())
         sys_prompt = build_system_prompt(school_focus, st.session_state.context, policy_names)
-        api_msgs = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
+        api_msgs = [{"role": m["role"], "content": m["content"]} for m in shared_chat.messages]
         if len(api_msgs) > 12: api_msgs = api_msgs[-12:]
 
         placeholder = st.empty()
@@ -1231,18 +1328,18 @@ with st.container():
                 st.session_state.cache_warmed = True
 
             parsed = parse_response(full_text)
-            ev_idx = len(st.session_state.evidence_history)
-            st.session_state.evidence_history.append({
-                "question": question, "evidence": parsed["evidence"],
-                "source": parsed["source"],
-                "raw": full_text,
-            })
-            st.session_state.messages.append({
-                "role": "assistant", "content": full_text,
-                "parsed": parsed, "evidence_idx": ev_idx,
-            })
+            shared_chat.add_assistant_message(
+                content=full_text,
+                parsed=parsed,
+                model=model_choice,
+                school_focus=school_focus,
+                usage=usage,
+                answering_user=get_user_name(),
+            )
+            shared_chat.clear_processing()
+            st.session_state.pending_answer = False
             log_event("answer",
-                      email=st.session_state.get("auth_email", "local"),
+                      email=get_user_email(),
                       school=school_focus, model=model_choice,
                       input_mode=input_mode.lower(),
                       question=question,
@@ -1255,7 +1352,9 @@ with st.container():
             st.rerun()
         except Exception as e:
             placeholder.error(f"Error: {e}")
-            st.session_state.messages.append({"role": "assistant", "content": f"Error: {e}", "parsed": {}, "evidence_idx": None})
+            shared_chat.add_error_message(str(e))
+            shared_chat.clear_processing()
+            st.session_state.pending_answer = False
 
     # ── Live transcript (at bottom, just above input) ──
     if input_mode == "Audio (Mic)" and audio_worker_running():
@@ -1314,8 +1413,10 @@ with st.container():
             if q not in st.session_state.processed_questions:
                 st.session_state.processed_questions.add(q)
                 clear_audio_questions()
-                st.session_state.messages.append({"role": "user", "content": q})
-                log_event("question", email=st.session_state.get("auth_email", "local"),
+                shared_chat.add_user_message(q, get_user_name(), get_user_email(), "audio")
+                shared_chat.set_processing(get_user_name(), q, model_choice)
+                st.session_state.pending_answer = True
+                log_event("question", email=get_user_email(),
                           school=school_focus, model=model_choice,
                           input_mode="audio", question=q)
                 st.rerun()
@@ -1323,15 +1424,27 @@ with st.container():
     # ── Chat input (always at bottom) ──
     question = st.chat_input("Ask an Ofsted inspection question...")
     if question:
-        st.session_state.messages.append({"role": "user", "content": question})
-        log_event("question", email=st.session_state.get("auth_email", "local"),
+        shared_chat.add_user_message(question, get_user_name(), get_user_email(), "text")
+        shared_chat.set_processing(get_user_name(), question, model_choice)
+        st.session_state.pending_answer = True
+        log_event("question", email=get_user_email(),
                   school=school_focus, model=model_choice,
                   input_mode="text", question=question)
         st.rerun()
 
 
-# ── Audio auto-refresh ───────────────────────────────────────────────────────
+# ── Auto-refresh polling (all sessions) ──────────────────────────────────────
+# Every tab continuously polls so it picks up messages from other sessions.
+# st.chat_input preserves typed text across reruns, so this won't interrupt typing.
 
-if input_mode == "Audio (Mic)" and audio_worker_running():
-    time.sleep(2)
+shared_chat = get_shared_chat()
+_current_count = shared_chat.get_message_count()
+
+# If new messages appeared, rerun immediately (no sleep) for snappy updates
+if _current_count != st.session_state.last_msg_count:
+    st.session_state.last_msg_count = _current_count
     st.rerun()
+
+# Always poll — this is the heartbeat that keeps tabs in sync
+time.sleep(3)
+st.rerun()
