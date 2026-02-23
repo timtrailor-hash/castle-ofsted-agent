@@ -22,6 +22,7 @@ class SharedChat:
         self.processing: dict | None = None  # {user_name, question, started_at, model}
         self.active_users: dict = {}  # {email: {name, last_seen}}
         self.lock = threading.Lock()
+        self.last_cleanup = time.time()
 
     # ── Messages ─────────────────────────────────────────────────────────
 
@@ -80,7 +81,28 @@ class SharedChat:
         return msg_id
 
     def get_message_count(self) -> int:
+        self._maybe_daily_cleanup()
         return len(self.messages)
+
+    def _maybe_daily_cleanup(self):
+        """Auto-clear chat at 2:00 AM UK time daily."""
+        from datetime import datetime, timedelta, timezone
+        try:
+            from zoneinfo import ZoneInfo
+            uk = ZoneInfo("Europe/London")
+        except ImportError:
+            uk = timezone.utc
+        now = datetime.now(uk)
+        today_2am = now.replace(hour=2, minute=0, second=0, microsecond=0)
+        if now.hour < 2:
+            today_2am -= timedelta(days=1)
+        cutoff = today_2am.timestamp()
+        if self.last_cleanup < cutoff and time.time() >= cutoff:
+            with self.lock:
+                self.messages.clear()
+                self.evidence_history.clear()
+                self.processing = None
+            self.last_cleanup = time.time()
 
     # ── Processing indicator ─────────────────────────────────────────────
 
