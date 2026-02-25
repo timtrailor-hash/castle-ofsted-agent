@@ -64,8 +64,18 @@ def load_env():
             os.environ["GEMINI_API_KEY"] = st.secrets["GEMINI_API_KEY"]
     except Exception:
         pass
-    # Fall back to .env file (local dev)
-    if ENV_FILE.exists() and not os.environ.get("ANTHROPIC_API_KEY"):
+    # Fall back to unified credentials.py (local dev)
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        try:
+            import sys
+            sys.path.insert(0, str(APP_DIR.parent))
+            from credentials import ANTHROPIC_API_KEY, GEMINI_API_KEY
+            os.environ["ANTHROPIC_API_KEY"] = ANTHROPIC_API_KEY
+            os.environ["GEMINI_API_KEY"] = GEMINI_API_KEY
+        except ImportError:
+            pass
+    # Final fallback: .env file
+    if not os.environ.get("ANTHROPIC_API_KEY") and ENV_FILE.exists():
         for line in ENV_FILE.read_text().splitlines():
             line = line.strip()
             if "=" in line and not line.startswith("#"):
@@ -100,14 +110,15 @@ def _get_gspread_client():
             info = dict(st.secrets["gcp_service_account"])
             creds = Credentials.from_service_account_info(info, scopes=scopes)
         except Exception:
-            # Local: JSON file
-            sa_path = APP_DIR.parent / "Downloads" / "castle-ofsted-agent-e9a07e17085b.json"
-            if not sa_path.exists():
-                sa_path = Path.home() / "Downloads" / "castle-ofsted-agent-e9a07e17085b.json"
-            if not sa_path.exists():
+            # Local: unified credentials.py
+            try:
+                import sys
+                sys.path.insert(0, str(APP_DIR.parent))
+                from credentials import GCP_SERVICE_ACCOUNT
+                creds = Credentials.from_service_account_info(GCP_SERVICE_ACCOUNT, scopes=scopes)
+            except (ImportError, Exception):
                 st.session_state.gs_client = None
                 return None
-            creds = Credentials.from_service_account_file(str(sa_path), scopes=scopes)
 
         client = gspread.authorize(creds)
         st.session_state.gs_client = client

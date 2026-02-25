@@ -1,6 +1,7 @@
 # Secrets — never commit
 .env
 .streamlit/secrets.toml
+credentials.py
 
 # Plaintext school documents — only encrypted version (.enc) goes to repo
 combined_context.md
@@ -21,3 +22,4 @@ __pycache__/
 *.pyc
 *.pyo
 .venv/
+venv/
