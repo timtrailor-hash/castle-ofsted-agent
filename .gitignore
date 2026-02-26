@@ -17,6 +17,11 @@ ofsted_agent.py
 OfstedAgent.icns
 mlx_models/
 
+# Google Drive sync (local-only — tokens contain secrets, links are generated)
+gdrive_token.json
+gdrive_links.json
+sync_to_gdrive.py
+
 # Python
 __pycache__/
 *.pyc

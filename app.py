@@ -27,6 +27,7 @@ ENV_FILE = APP_DIR / ".env"
 LOGO_FILE = APP_DIR / "logo.png"
 TREE_FILE = APP_DIR / "tree.png"
 SCHOOL_DOCS = Path.home() / "Desktop" / "school docs"
+GDRIVE_LINKS_FILE = APP_DIR / "gdrive_links.json"
 AUDIO_STATE_FILE = APP_DIR / "audio_state.json"
 AUDIO_PID_FILE = APP_DIR / "audio_worker.pid"
 AUDIO_LOG_FILE = APP_DIR / "audio_worker.log"
@@ -37,11 +38,32 @@ PYTHON_PATH = Path.home() / "anaconda3" / "bin" / "python"
 IS_CLOUD = not Path.home().joinpath("Desktop", "school docs").exists()
 
 
+def _load_gdrive_links():
+    """Load Google Drive link mapping (filename → drive_url)."""
+    if GDRIVE_LINKS_FILE.exists():
+        try:
+            with open(GDRIVE_LINKS_FILE) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
 # ── User identity helpers ────────────────────────────────────────────────────
 
 def get_user_email():
     if st.session_state.get("auth_email"):
         return st.session_state["auth_email"]
+    # Native iOS app passes ?app_user=tim to identify the user
+    app_user = st.query_params.get("app_user")
+    if app_user:
+        # Map known app users to their email addresses
+        app_user_map = {"tim": "tim.trailor@castlefederation.org"}
+        if app_user.lower() in app_user_map:
+            email = app_user_map[app_user.lower()]
+            st.session_state.auth_email = email
+            st.session_state.authenticated = True
+            return email
     # Local mode: each tab gets a unique session identity so active_users
     # can distinguish them (auth is skipped locally → no email set).
     if "local_session_id" not in st.session_state:
@@ -1305,17 +1327,24 @@ for i, msg in enumerate(shared_chat.messages):
                     st.markdown(f'<div class="source-label">{refs}</div>', unsafe_allow_html=True)
             else:
                 idx = st.session_state.get("file_index", {})
+                gdrive = _load_gdrive_links()
                 for fi, cite in enumerate(citations[:5]):
                     file_match = match_citation(cite, idx) if idx else None
                     if file_match:
-                        # Build a web link so docs open on the client (mobile), not the server
-                        rel_path = str(Path(file_match[1]).relative_to(SCHOOL_DOCS))
-                        import urllib.parse
-                        doc_url = f"/governors/doc/{urllib.parse.quote(rel_path)}"
+                        fname = file_match[0]
+                        # Prefer Google Drive link (opens natively on iOS)
+                        gdrive_entry = gdrive.get(fname)
+                        if gdrive_entry and gdrive_entry.get("drive_url"):
+                            doc_url = gdrive_entry["drive_url"]
+                        else:
+                            # Fallback to local file serving
+                            rel_path = str(Path(file_match[1]).relative_to(SCHOOL_DOCS))
+                            import urllib.parse
+                            doc_url = f"/governors/doc/{urllib.parse.quote(rel_path)}"
                         st.markdown(
                             f'<a href="{doc_url}" target="_blank" style="display:block;padding:8px 12px;'
                             f'margin:4px 0;background:#1e3a5f;border-radius:6px;color:#C9A96E;'
-                            f'text-decoration:none;font-size:14px;">📂 Open: {file_match[0]}</a>',
+                            f'text-decoration:none;font-size:14px;">📂 Open: {fname}</a>',
                             unsafe_allow_html=True
                         )
                     else:
