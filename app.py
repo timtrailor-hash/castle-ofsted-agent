@@ -1225,6 +1225,7 @@ if "file_index" not in st.session_state:
 
 # ── Cache warmup ──
 shared_chat = get_shared_chat()
+shared_chat.check_reset_flag()
 # Skip warmup overlay if shared chat already has messages (cache warm from another session)
 if shared_chat.get_message_count() > 0 and not st.session_state.cache_warmed:
     st.session_state.cache_warmed = True
@@ -1307,9 +1308,16 @@ for i, msg in enumerate(shared_chat.messages):
                 for fi, cite in enumerate(citations[:5]):
                     file_match = match_citation(cite, idx) if idx else None
                     if file_match:
-                        if st.button(f"📂  Open: {file_match[0]}", key=f"doc_{i}_{fi}", use_container_width=True):
-                            subprocess.Popen(["open", file_match[1]])
-                            st.toast(f"Opened: {file_match[0]}")
+                        # Build a web link so docs open on the client (mobile), not the server
+                        rel_path = str(Path(file_match[1]).relative_to(SCHOOL_DOCS))
+                        import urllib.parse
+                        doc_url = f"/governors/doc/{urllib.parse.quote(rel_path)}"
+                        st.markdown(
+                            f'<a href="{doc_url}" target="_blank" style="display:block;padding:8px 12px;'
+                            f'margin:4px 0;background:#1e3a5f;border-radius:6px;color:#C9A96E;'
+                            f'text-decoration:none;font-size:14px;">📂 Open: {file_match[0]}</a>',
+                            unsafe_allow_html=True
+                        )
                     else:
                         st.caption(f"📄 {cite}")
 

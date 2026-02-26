@@ -150,6 +150,17 @@ class SharedChat:
             self.evidence_history.clear()
             self.processing = None
 
+    def check_reset_flag(self):
+        """Check for external reset signal (from native app)."""
+        import os
+        flag = "/tmp/governors_reset_flag"
+        if os.path.exists(flag):
+            try:
+                os.remove(flag)
+            except OSError:
+                pass
+            self.reset_chat()
+
 
 @st.cache_resource
 def get_shared_chat() -> SharedChat:
