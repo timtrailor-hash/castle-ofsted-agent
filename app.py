@@ -1258,9 +1258,10 @@ shared_chat.check_reset_flag()
 if shared_chat.get_message_count() > 0 and not st.session_state.cache_warmed:
     st.session_state.cache_warmed = True
 
+is_mobile_app = st.query_params.get("app_user") is not None
 if not st.session_state.cache_warmed and model_info["provider"] == "anthropic" and not st.session_state.warming_up and not st.session_state.get("warmup_failed"):
-    if IS_CLOUD:
-        # Cloud: skip blocking warmup — cache warms on the first real question.
+    if IS_CLOUD or is_mobile_app:
+        # Cloud/mobile: skip blocking warmup — cache warms on the first real question.
         st.session_state.cache_warmed = True
     else:
         st.session_state.warming_up = True
