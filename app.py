@@ -586,9 +586,12 @@ def build_file_index():
     """Build a filename→path index once at startup. Avoids repeated Desktop access prompts."""
     index = {}
     if SCHOOL_DOCS.exists():
-        for f in SCHOOL_DOCS.rglob("*"):
-            if f.is_file():
-                index[f.name] = str(f)
+        try:
+            for f in SCHOOL_DOCS.rglob("*"):
+                if f.is_file():
+                    index[f.name] = str(f)
+        except (InterruptedError, OSError):
+            pass  # partial index is fine — transient IO errors during scan
     return index
 
 
