@@ -64,8 +64,10 @@ def get_user_email():
             st.session_state.auth_email = email
             st.session_state.authenticated = True
             return email
-    # Local mode: each tab gets a unique session identity so active_users
-    # can distinguish them (auth is skipped locally → no email set).
+    # Local mode: default to Tim (only local user)
+    if not IS_CLOUD:
+        return "tim.trailor@castlefederation.org"
+    # Cloud fallback: unique session identity
     if "local_session_id" not in st.session_state:
         import uuid
         st.session_state.local_session_id = uuid.uuid4().hex[:6]
