@@ -1249,6 +1249,10 @@ if "file_index" not in st.session_state:
 
 # ── Cache warmup ──
 shared_chat = get_shared_chat()
+# Guard against stale @st.cache_resource instance missing newer methods
+if not hasattr(shared_chat, 'check_reset_flag'):
+    st.cache_resource.clear()
+    st.rerun()
 shared_chat.check_reset_flag()
 # Skip warmup overlay if shared chat already has messages (cache warm from another session)
 if shared_chat.get_message_count() > 0 and not st.session_state.cache_warmed:
