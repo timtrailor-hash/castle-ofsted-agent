@@ -1160,10 +1160,18 @@ with st.sidebar:
     st.markdown("---")
 
     st.markdown("### School")
-    school_focus = st.selectbox("Select school", list(SCHOOL_FOCUS.keys()), index=0, label_visibility="collapsed")
+    # iOS app passes ?school= query param to set default
+    _school_param = st.query_params.get("school", "")
+    _school_map = {"victoria": 0, "thomas_coram": 1, "both": 2}
+    _school_default = _school_map.get(_school_param, 0)
+    school_focus = st.selectbox("Select school", list(SCHOOL_FOCUS.keys()), index=_school_default, label_visibility="collapsed")
 
     st.markdown("### Model")
-    model_choice = st.selectbox("Select model", list(MODELS.keys()), index=0, label_visibility="collapsed")
+    # iOS app passes ?model= query param to set default
+    _model_param = st.query_params.get("model", "")
+    _model_map = {"haiku": 0, "sonnet": 1, "gemini_flash": 2}
+    _model_default = _model_map.get(_model_param, 0)
+    model_choice = st.selectbox("Select model", list(MODELS.keys()), index=_model_default, label_visibility="collapsed")
     model_info = MODELS[model_choice]
 
     st.markdown("### Input")
