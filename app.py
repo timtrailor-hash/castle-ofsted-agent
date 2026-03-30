@@ -31,7 +31,7 @@ GDRIVE_LINKS_FILE = APP_DIR / "gdrive_links.json"
 AUDIO_STATE_FILE = APP_DIR / "audio_state.json"
 AUDIO_PID_FILE = APP_DIR / "audio_worker.pid"
 AUDIO_LOG_FILE = APP_DIR / "audio_worker.log"
-PYTHON_PATH = Path.home() / "anaconda3" / "bin" / "python"
+PYTHON_PATH = Path("/opt/homebrew/bin/python3.11")
 
 # ── Environment detection ────────────────────────────────────────────────────
 
