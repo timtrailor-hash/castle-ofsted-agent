@@ -1124,10 +1124,16 @@ for key, default in [
     if key not in st.session_state:
         st.session_state[key] = default
 
-if "context" not in st.session_state:
+# Detect context file changes and reload automatically
+_ctx_source = CONTEXT_FILE if CONTEXT_FILE.exists() else CONTEXT_FILE_ENC
+_ctx_mtime = _ctx_source.stat().st_mtime if _ctx_source.exists() else 0
+_ctx_stale = st.session_state.get("_context_mtime", 0) != _ctx_mtime
+
+if "context" not in st.session_state or _ctx_stale:
     if CONTEXT_FILE.exists():
         # Local: read plaintext directly
         st.session_state.context = trim_context(CONTEXT_FILE.read_text())
+        st.session_state._context_mtime = CONTEXT_FILE.stat().st_mtime
     elif CONTEXT_FILE_ENC.exists():
         # Cloud: decrypt from encrypted file using key in secrets
         try:
@@ -1136,6 +1142,7 @@ if "context" not in st.session_state:
             st.session_state.context = trim_context(
                 Fernet(key).decrypt(CONTEXT_FILE_ENC.read_bytes()).decode()
             )
+            st.session_state._context_mtime = CONTEXT_FILE_ENC.stat().st_mtime
         except Exception as e:
             st.error(f"Failed to decrypt context: {e}")
             st.session_state.context = ""
