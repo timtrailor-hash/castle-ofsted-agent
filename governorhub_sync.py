@@ -545,12 +545,27 @@ def encrypt_context(plaintext: str):
     log.info("Encrypted context written to %s", CONTEXT_FILE_ENC)
 
 
+def restart_streamlit():
+    """Restart the governors Streamlit app so it picks up the new context."""
+    import subprocess
+    try:
+        uid = subprocess.check_output(["id", "-u"], text=True).strip()
+        subprocess.run(
+            ["launchctl", "kickstart", "-k", f"gui/{uid}/com.timtrailor.governors"],
+            capture_output=True, timeout=10,
+        )
+        log.info("Streamlit app restarted to load new context")
+    except Exception as e:
+        log.warning("Could not restart Streamlit: %s", e)
+
+
 def rebuild_context():
-    """Build, write, and encrypt the context file."""
+    """Build, write, encrypt the context file, and restart Streamlit."""
     context = build_context()
     CONTEXT_FILE.write_text(context)
     log.info("Context written to %s (%s chars)", CONTEXT_FILE, f"{len(context):,}")
     encrypt_context(context)
+    restart_streamlit()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
