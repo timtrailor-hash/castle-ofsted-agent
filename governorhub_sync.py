@@ -42,7 +42,11 @@ MAX_CONTEXT_TOKENS = 150_000
 # IDs discovered via GraphQL introspection 2026-04-10.
 TARGET_FOLDERS = [
     ("Ofsted 26 Victoria", "67fb7e1feff307c583e86f80"),
-    ("Safeguarding", None),  # ID resolved at runtime (changes on GovernorHub)
+    ("Full Governing Body Meetings", "5ad097177b006d0a838b2356"),
+    ("Admissions Committee Meetings", "5c3cd141d4ebd304a7c06c50"),
+    ("Pupil & Curriculum Cttee Meetings", "5b3e098c65cd700006ff479c"),
+    ("Resources Cttee Meetings", "5b3e0997eac6e900050fa7a8"),
+    ("Safeguarding", None),  # ID resolved at runtime
     ("SIAMS", None),
     ("Policies", "685b1d0856372f7690dc0961"),
 ]
@@ -55,8 +59,13 @@ TIER_1_FOLDERS = {
 }
 TIER_1_ROOT = {"Ofsted 26 Victoria"}  # Root-level files in this folder = Tier 1
 
-# Minutes: only include current + previous academic year
+# Minutes/meetings: only include current + previous academic year in context
 MINUTES_FOLDER = "Minutes"
+MEETING_FOLDERS = {
+    "Full Governing Body Meetings", "Admissions Committee Meetings",
+    "Pupil & Curriculum Cttee Meetings", "Resources Cttee Meetings",
+}
+CURRENT_ACADEMIC_YEARS = ("2025-26", "2024-25")
 
 # Boilerplate patterns to strip during text extraction
 BOILERPLATE_RE = re.compile(
@@ -214,16 +223,23 @@ def download_file(page, file_id: str, filename: str, dest_dir: Path,
 
 
 def sync_folder_recursive(page, folder_id: str, folder_name: str, dest_dir: Path,
-                          dry_run: bool, stats: dict, depth: int = 0):
+                          dry_run: bool, stats: dict, depth: int = 0,
+                          year_filter: bool = False):
     indent = "  " * depth
     log.info("%sSyncing: %s", indent, folder_name)
     items = list_folder_contents(page, folder_id)
     for item in items:
         if item["is_folder"]:
+            # For meeting folders, skip academic years older than current + previous
+            if year_filter and depth == 0:
+                if not any(y in item["filename"] for y in CURRENT_ACADEMIC_YEARS):
+                    log.debug("%s  Skipping old year: %s", indent, item["filename"])
+                    continue
             sync_folder_recursive(
                 page, item["id"], item["filename"],
                 dest_dir / sanitize_filename(item["filename"]),
                 dry_run, stats, depth + 1,
+                year_filter=year_filter,
             )
         else:
             if item["prevent_download"]:
@@ -258,7 +274,9 @@ def run_sync(dry_run: bool) -> dict:
                     log.warning("Could not resolve ID for folder: %s", folder_name)
                     continue
                 dest = OUTPUT_DIR / sanitize_filename(folder_name)
-                sync_folder_recursive(page, fid, folder_name, dest, dry_run, stats)
+                is_meeting = folder_name in MEETING_FOLDERS
+                sync_folder_recursive(page, fid, folder_name, dest, dry_run, stats,
+                                      year_filter=is_meeting)
         finally:
             browser.close()
 
@@ -433,9 +451,12 @@ def build_context() -> str:
             rel_path = filepath.relative_to(OUTPUT_DIR)
             rel_folder = str(rel_path.parent)
 
-            # Minutes filter: only current + previous academic year
-            if MINUTES_FOLDER in rel_folder:
-                if not any(y in rel_folder for y in ("2025-26", "2024-25")):
+            # Minutes/meetings filter: only current + previous academic year
+            is_meeting = MINUTES_FOLDER in rel_folder or any(
+                mf in rel_folder for mf in MEETING_FOLDERS
+            )
+            if is_meeting:
+                if not any(y in rel_folder for y in CURRENT_ACADEMIC_YEARS):
                     continue
 
             text = extract_text(filepath)
