@@ -46,9 +46,13 @@ TARGET_FOLDERS = [
     ("Admissions Committee Meetings", "5c3cd141d4ebd304a7c06c50"),
     ("Pupil & Curriculum Cttee Meetings", "5b3e098c65cd700006ff479c"),
     ("Resources Cttee Meetings", "5b3e0997eac6e900050fa7a8"),
-    ("Safeguarding", None),  # ID resolved at runtime
+    ("Governor Visits", "5af41dca310aee097a1b4400"),
+    ("Safeguarding", None),  # IDs resolved at runtime
     ("SIAMS", None),
     ("Policies", "685b1d0856372f7690dc0961"),
+    ("Helpful Documents", None),
+    ("Risk Register", None),
+    ("Training", None),
 ]
 
 # Tier assignment for context building — order matters (Tier 1 first).
@@ -64,6 +68,7 @@ MINUTES_FOLDER = "Minutes"
 MEETING_FOLDERS = {
     "Full Governing Body Meetings", "Admissions Committee Meetings",
     "Pupil & Curriculum Cttee Meetings", "Resources Cttee Meetings",
+    "Governor Visits",
 }
 CURRENT_ACADEMIC_YEARS = ("2025-26", "2024-25")
 
@@ -431,11 +436,90 @@ def assign_tier(folder_path: str, filename: str) -> int:
     return 2
 
 
+def _classify_document(rel_folder: str, filename: str) -> tuple:
+    """Classify a document into (section, meeting_date_or_none).
+
+    Sections: 'ofsted_prep', 'fgb', 'resources', 'p_and_c', 'admissions',
+              'safeguarding', 'siams', 'policies', 'other'
+    """
+    parts = Path(rel_folder).parts
+
+    # Meeting folders — extract meeting date from folder name
+    meeting_date = None
+    for p in parts:
+        # Match date-like folder names: "2026-03-25", "2025 03 26", etc.
+        m = re.match(r"(\d{4})[-_ ](\d{2})[-_ ](\d{2})", p)
+        if m:
+            meeting_date = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+
+    # Committee meetings — check FIRST (even inside Ofsted 26 Victoria)
+    if "Full Governing Body Meetings" in rel_folder:
+        return ("fgb", meeting_date)
+    if "Resources Cttee Meetings" in rel_folder:
+        return ("resources", meeting_date)
+    if "Pupil & Curriculum Cttee Meetings" in rel_folder:
+        return ("p_and_c", meeting_date)
+    if "Admissions Committee Meetings" in rel_folder:
+        return ("admissions", meeting_date)
+    if "Governor Visits" in rel_folder:
+        return ("governor_visits", meeting_date)
+    # Minutes inside Ofsted 26 Victoria — classify by committee
+    if MINUTES_FOLDER in rel_folder:
+        for keyword, section in [("FGB", "fgb"), ("Resources", "resources"),
+                                 ("P&C", "p_and_c"), ("Admissions", "admissions")]:
+            if keyword in rel_folder:
+                return (section, meeting_date)
+    # Non-meeting sections
+    if "Ofsted 26 Victoria" in rel_folder:
+        return ("ofsted_prep", None)
+    if "Safeguarding" in rel_folder:
+        return ("safeguarding", None)
+    if "SIAMS" in rel_folder:
+        return ("siams", None)
+    if "Policies" in rel_folder:
+        return ("policies", None)
+    if "Helpful Documents" in rel_folder:
+        return ("helpful", None)
+    if "Risk Register" in rel_folder:
+        return ("risk_register", None)
+    if "Training" in rel_folder:
+        return ("training", None)
+    return ("other", None)
+
+
+SECTION_LABELS = {
+    "ofsted_prep": "OFSTED PREPARATION — Key Documents for Victoria Inspection",
+    "fgb": "FULL GOVERNING BODY (FGB) MEETINGS",
+    "resources": "RESOURCES COMMITTEE MEETINGS",
+    "p_and_c": "PUPIL & CURRICULUM COMMITTEE MEETINGS",
+    "admissions": "ADMISSIONS COMMITTEE MEETINGS",
+    "governor_visits": "GOVERNOR VISITS",
+    "safeguarding": "SAFEGUARDING",
+    "siams": "SIAMS (Church Inspection)",
+    "policies": "CURRENT POLICIES",
+    "helpful": "HELPFUL DOCUMENTS",
+    "risk_register": "RISK REGISTER",
+    "training": "TRAINING",
+    "other": "OTHER DOCUMENTS",
+}
+
+# Section ordering — most important first
+SECTION_ORDER = [
+    "ofsted_prep", "fgb", "resources", "p_and_c",
+    "admissions", "governor_visits", "safeguarding", "siams",
+    "policies", "helpful", "risk_register", "training", "other",
+]
+
+# Committee sections that get grouped by meeting date
+COMMITTEE_SECTIONS = {"fgb", "resources", "p_and_c", "admissions", "governor_visits"}
+
+
 def build_context() -> str:
-    """Walk downloaded folders, extract text, build combined_context.md."""
+    """Walk downloaded folders, extract text, build combined_context.md with clear sections."""
     log.info("Building context from downloaded files...")
 
-    documents = {"tier1": [], "tier2": []}
+    # Collect all documents, classified by section
+    sections = {s: [] for s in SECTION_ORDER}
 
     for folder_name, _ in TARGET_FOLDERS:
         folder_path = OUTPUT_DIR / sanitize_filename(folder_name)
@@ -447,7 +531,6 @@ def build_context() -> str:
             if filepath.is_dir():
                 continue
 
-            # Get relative path from School docs for context tagging
             rel_path = filepath.relative_to(OUTPUT_DIR)
             rel_folder = str(rel_path.parent)
 
@@ -465,24 +548,52 @@ def build_context() -> str:
 
             text = compress_text(text)
             mtime = datetime.fromtimestamp(filepath.stat().st_mtime)
-            tier = assign_tier(rel_folder, filepath.name)
+            section, meeting_date = _classify_document(rel_folder, filepath.name)
 
             entry = {
                 "filename": filepath.name,
                 "folder": rel_folder,
                 "modified": mtime.strftime("%Y-%m-%d"),
+                "meeting_date": meeting_date,
                 "text": text,
                 "tokens": estimate_tokens(text),
             }
 
-            if tier == 1:
-                documents["tier1"].append(entry)
+            if section in sections:
+                sections[section].append(entry)
             else:
-                documents["tier2"].append(entry)
+                sections["other"].append(entry)
 
-    # Sort each tier by modification date (newest first)
-    for tier in documents.values():
-        tier.sort(key=lambda d: d["modified"], reverse=True)
+    # Sort within each section: meetings by meeting date (newest first),
+    # others by modification date (newest first)
+    for section, docs in sections.items():
+        docs.sort(
+            key=lambda d: d.get("meeting_date") or d["modified"],
+            reverse=True,
+        )
+
+    # Build meeting date index for committee sections
+    meeting_index_lines = []
+    for section in COMMITTEE_SECTIONS:
+        dates = sorted(set(
+            d["meeting_date"] for d in sections[section] if d.get("meeting_date")
+        ), reverse=True)
+        if dates:
+            label = SECTION_LABELS[section].split(" — ")[0]
+            meeting_index_lines.append(
+                f"- **{label}**: {', '.join(dates)}"
+            )
+
+    meeting_index = ""
+    if meeting_index_lines:
+        meeting_index = (
+            "\n## MEETING DATES INDEX\n"
+            "The following committee meetings have documents in this context "
+            "(most recent first):\n"
+            + "\n".join(meeting_index_lines)
+            + "\n\nWhen asked about the 'last' or 'most recent' meeting, "
+            "refer to this index to identify the correct date.\n"
+        )
 
     # Assemble the context file
     header = f"""# Castle CE Federation — Ofsted Inspection Reference
@@ -490,38 +601,120 @@ def build_context() -> str:
 # Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
 
 This document contains key school documents for the Ofsted inspection.
-Each section is tagged with [SOURCE: filename | folder | date] for reference.
+Documents are organised by section. Each document is tagged with
+[SOURCE: filename | folder | date] for reference.
 
 Key schools:
 - **Victoria CE Infant & Nursery School** — Last inspected Oct 2023 (Requires Improvement)
 - **Thomas Coram CE School** — Last inspected June 2023 (Good)
 - **Castle CE Federation** — Federation of both schools, shared governing body
-
+{meeting_index}
 """
+
+    # Allocate token budget per section — ensures every section gets represented.
+    # Priority sections get more budget; remaining is split among the rest.
+    SECTION_BUDGETS = {
+        "ofsted_prep": 40_000,
+        "fgb": 25_000,
+        "resources": 15_000,
+        "p_and_c": 15_000,
+        "admissions": 5_000,
+        "governor_visits": 10_000,
+        "safeguarding": 15_000,
+        "siams": 5_000,
+        "policies": 10_000,
+        "helpful": 3_000,
+        "risk_register": 3_000,
+        "training": 3_000,
+        "other": 1_000,
+    }
 
     parts = [header]
     token_count = estimate_tokens(header)
+    total_docs = 0
 
-    for tier_name, tier_label in [("tier1", "TIER 1 — CRITICAL DOCUMENTS"),
-                                   ("tier2", "TIER 2 — SUPPORTING DOCUMENTS")]:
-        parts.append(f"\n{'=' * 70}\n# {tier_label}\n{'=' * 70}\n")
-        token_count += 20
+    for section in SECTION_ORDER:
+        docs = sections[section]
+        if not docs:
+            continue
 
-        for doc in documents[tier_name]:
-            # Check if adding this doc would exceed budget
-            doc_tokens = doc["tokens"] + 10  # overhead for SOURCE tag
-            if token_count + doc_tokens > MAX_CONTEXT_TOKENS:
-                parts.append(f"\n[... remaining {tier_name} documents omitted "
-                             f"(token budget reached at {token_count:,}) ...]\n")
-                break
+        label = SECTION_LABELS[section]
+        section_budget = SECTION_BUDGETS.get(section, 5_000)
+        section_used = 0
+        section_header = f"\n{'=' * 70}\n# {label}\n{'=' * 70}\n"
 
-            source_tag = f"[SOURCE: {doc['filename']} | {doc['folder']} | Modified: {doc['modified']}]"
-            parts.append(f"\n---\n{source_tag}\n\n{doc['text']}\n")
-            token_count += doc_tokens
+        # For committee meetings, group by meeting date
+        if section in COMMITTEE_SECTIONS:
+            parts.append(section_header)
+            token_count += 20
+            section_used += 20
+
+            by_date = {}
+            undated = []
+            for doc in docs:
+                md = doc.get("meeting_date")
+                if md:
+                    by_date.setdefault(md, []).append(doc)
+                else:
+                    undated.append(doc)
+
+            for meeting_date in sorted(by_date.keys(), reverse=True):
+                if section_used >= section_budget:
+                    break
+                meeting_docs = by_date[meeting_date]
+                meeting_header = f"\n--- Meeting: {meeting_date} ---\n"
+                parts.append(meeting_header)
+                token_count += 5
+                section_used += 5
+
+                for doc in meeting_docs:
+                    doc_tokens = doc["tokens"] + 10
+                    if section_used + doc_tokens > section_budget:
+                        break
+                    if token_count + doc_tokens > MAX_CONTEXT_TOKENS:
+                        break
+                    source_tag = (f"[SOURCE: {doc['filename']} | "
+                                  f"{doc['folder']} | Modified: {doc['modified']}]")
+                    parts.append(f"\n{source_tag}\n\n{doc['text']}\n")
+                    token_count += doc_tokens
+                    section_used += doc_tokens
+                    total_docs += 1
+
+            for doc in undated:
+                if section_used >= section_budget:
+                    break
+                doc_tokens = doc["tokens"] + 10
+                if token_count + doc_tokens > MAX_CONTEXT_TOKENS:
+                    break
+                source_tag = (f"[SOURCE: {doc['filename']} | "
+                              f"{doc['folder']} | Modified: {doc['modified']}]")
+                parts.append(f"\n---\n{source_tag}\n\n{doc['text']}\n")
+                token_count += doc_tokens
+                section_used += doc_tokens
+                total_docs += 1
+        else:
+            parts.append(section_header)
+            token_count += 20
+            section_used += 20
+
+            for doc in docs:
+                doc_tokens = doc["tokens"] + 10
+                if section_used + doc_tokens > section_budget:
+                    break
+                if token_count + doc_tokens > MAX_CONTEXT_TOKENS:
+                    break
+                source_tag = (f"[SOURCE: {doc['filename']} | "
+                              f"{doc['folder']} | Modified: {doc['modified']}]")
+                parts.append(f"\n---\n{source_tag}\n\n{doc['text']}\n")
+                token_count += doc_tokens
+                section_used += doc_tokens
+                total_docs += 1
+
+        log.info("  Section %s: %d tokens used (budget %d)",
+                 section, section_used, section_budget)
 
     context = "".join(parts)
 
-    # Write the header with actual token count
     actual_estimate = estimate_tokens(context)
     context = context.replace(
         "# Generated:",
@@ -530,8 +723,7 @@ Key schools:
     )
 
     log.info("Context built: %d documents, ~%s tokens, %s chars",
-             sum(len(t) for t in documents.values()),
-             f"{actual_estimate:,}", f"{len(context):,}")
+             total_docs, f"{actual_estimate:,}", f"{len(context):,}")
 
     return context
 
