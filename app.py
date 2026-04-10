@@ -205,7 +205,7 @@ def log_event(event, email="", school="", model="", input_mode="",
 MODELS = {
     "Haiku (fastest)": {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
     "Sonnet (balanced)": {"provider": "anthropic", "model": "claude-sonnet-4-5-20250929"},
-    "Gemini Flash (free)": {"provider": "gemini", "model": "gemini-2.0-flash"},
+    "Gemini Flash (free)": {"provider": "gemini", "model": "gemini-2.5-flash"},
 }
 
 NAVY = "#2a2e45"
