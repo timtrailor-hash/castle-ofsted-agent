@@ -1177,7 +1177,7 @@ with st.sidebar:
     # iOS app passes ?model= query param to set default
     _model_param = st.query_params.get("model", "")
     _model_map = {"haiku": 0, "sonnet": 1, "gemini_flash": 2}
-    _model_default = _model_map.get(_model_param, 0)
+    _model_default = _model_map.get(_model_param, 2)  # Default to Gemini Flash (free + better reasoning)
     model_choice = st.selectbox("Select model", list(MODELS.keys()), index=_model_default, label_visibility="collapsed")
     model_info = MODELS[model_choice]
 
