@@ -1237,6 +1237,12 @@ with st.sidebar:
         st.session_state.last_msg_count = 0
         st.session_state.pending_answer = False
         st.session_state.processed_questions = set()
+        # Force context reload from disk on next run
+        if "context" in st.session_state:
+            del st.session_state["context"]
+        if "_context_mtime" in st.session_state:
+            del st.session_state["_context_mtime"]
+        st.session_state.cache_warmed = False
         st.rerun()
 
     st.markdown("---")
