@@ -337,6 +337,93 @@ def trim_context(text, max_tokens=MAX_CONTEXT_TOKENS):
         return text
 
 
+def extract_relevant_sections(question, full_context, max_chars=20000):
+    """Extract sections from combined_context.md most relevant to the question.
+
+    Uses keyword matching to find meeting dates, entity names, and topic keywords.
+    Returns a focused excerpt that can be prepended to the user message to direct
+    Claude's attention, working WITH prompt caching (the system prompt stays stable).
+
+    This addresses the "lost in the middle" effect (Liu et al. 2023) where
+    information buried in a 100K-token context is reliably missed.
+    """
+    if not question or not full_context:
+        return ""
+
+    lines = full_context.split("\n")
+    scored_ranges = []  # [(start_line, end_line, score, reason)]
+
+    # 1. Date extraction — find dates in the question and match meeting sections.
+    date_patterns = [
+        # "25 March", "March 25", "25th March", etc.
+        r'(\d{1,2})(?:st|nd|rd|th)?\s+(January|February|March|April|May|June|July|August|September|October|November|December)',
+        r'(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})(?:st|nd|rd|th)?',
+        # ISO dates: 2026-03-25
+        r'(\d{4}-\d{2}-\d{2})',
+    ]
+    date_keywords = []
+    for pat in date_patterns:
+        for m in re.finditer(pat, question, re.I):
+            date_keywords.append(m.group(0))
+
+    # 2. Entity extraction — FGB, Resources, SIAMS, school names, people.
+    entity_keywords = []
+    for term in ["FGB", "full governing body", "Resources", "SIAMS",
+                 "Victoria", "Thomas Coram", "safeguarding", "budget",
+                 "attendance", "SEND", "PPG", "phonics", "GLD", "EYFS",
+                 "Ofsted", "improvement plan", "FIP", "SEF"]:
+        if term.lower() in question.lower():
+            entity_keywords.append(term)
+
+    all_keywords = date_keywords + entity_keywords
+    if not all_keywords:
+        # No specific keywords — don't extract, let full context handle it
+        return ""
+
+    # 3. Score each line by keyword proximity.
+    WINDOW = 30  # lines of context around a match
+    matched_lines = set()
+    for i, line in enumerate(lines):
+        line_lower = line.lower()
+        for kw in all_keywords:
+            if kw.lower() in line_lower:
+                # Include a window around the match
+                start = max(0, i - 5)
+                end = min(len(lines), i + WINDOW)
+                matched_lines.update(range(start, end))
+
+    if not matched_lines:
+        return ""
+
+    # 4. Build excerpt from matched lines, preserving order.
+    sorted_lines = sorted(matched_lines)
+    sections = []
+    current_section = []
+    prev = -999
+    for ln in sorted_lines:
+        if ln - prev > 3:
+            if current_section:
+                sections.append("\n".join(current_section))
+            current_section = [f"[...line {ln}...]"]
+        current_section.append(lines[ln])
+        prev = ln
+    if current_section:
+        sections.append("\n".join(current_section))
+
+    excerpt = "\n\n---\n\n".join(sections)
+
+    # 5. Trim to budget.
+    if len(excerpt) > max_chars:
+        excerpt = excerpt[:max_chars] + "\n\n[... excerpt trimmed ...]"
+
+    return (
+        f"RELEVANT CONTEXT EXTRACT (keywords: {', '.join(all_keywords)}):\n"
+        f"The following sections from the school documents are most relevant to your question. "
+        f"Focus your answer on these sections first, then check the full document corpus if needed.\n\n"
+        f"{excerpt}"
+    )
+
+
 def build_system_prompt(school_focus_key, context, policy_names=None):
     prompt = SYSTEM_PROMPT_TEMPLATE.format(
         school_focus=SCHOOL_FOCUS[school_focus_key],
@@ -1400,6 +1487,15 @@ if st.session_state.pending_answer and shared_chat.messages and shared_chat.mess
     sys_prompt = build_system_prompt(school_focus, st.session_state.context, policy_names)
     api_msgs = [{"role": m["role"], "content": m["content"]} for m in shared_chat.messages]
     if len(api_msgs) > 12: api_msgs = api_msgs[-12:]
+
+    # Enrich the last user message with relevant context extracts to combat
+    # lost-in-the-middle effect on the 100K-token corpus (audit 2026-04-12).
+    relevant = extract_relevant_sections(question, st.session_state.context)
+    if relevant and api_msgs:
+        api_msgs[-1] = {
+            "role": "user",
+            "content": f"{relevant}\n\n---\n\nQUESTION: {api_msgs[-1]['content']}",
+        }
 
     placeholder = st.empty()
     try:
