@@ -795,3 +795,14 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# --- Autocommit combined_context.md.enc so health_check git:ofsted-agent stays clean ---
+import subprocess as _sp
+try:
+    _sp.run(['git', '-C', str(OFSTED_AGENT_DIR), 'add', 'combined_context.md.enc'], check=False, timeout=10)
+    _r = _sp.run(['git', '-C', str(OFSTED_AGENT_DIR), 'diff', '--cached', '--quiet'], timeout=10)
+    if _r.returncode != 0:
+        _sp.run(['git', '-C', str(OFSTED_AGENT_DIR), 'commit', '-m', 'Context refresh: governorhub-sync hourly re-encryption'], check=False, timeout=15)
+except Exception as _e:
+    print(f'autocommit skipped: {_e}')
+
